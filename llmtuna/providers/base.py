@@ -41,6 +41,8 @@ class Provider(ABC):
             hparam name to value, e.g. ``{"lr": 1e-3, "depth": 12}``.
 
         Raises:
-            RuntimeError: If the LLM did not call the tool after retries
-                or returned an unparseable response.
+            Exception: Subclasses signal failures by raising — the type
+                varies by backend (network errors, malformed responses,
+                test misconfiguration). See each concrete provider's
+                docstring for specifics.
         """
