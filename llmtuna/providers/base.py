@@ -1,0 +1,46 @@
+"""Provider — vendor-neutral abstract base class for LLM backends.
+
+A Provider takes a system prompt, a user message, and a tool spec, forwards
+them to an LLM backend, and returns the parsed arguments of the LLM's
+forced tool call as a plain dict mapping hparam name to value.
+
+All vendor-specific concerns — API client setup, tool-format translation,
+response parsing, reasoning-token configuration, retry-on-malformed-output —
+live inside concrete subclasses (e.g. ``OpenRouter``, ``MockProvider``).
+"""
+
+from abc import ABC, abstractmethod
+
+
+class Provider(ABC):
+    """Abstract base class for LLM providers.
+
+    Subclasses must implement ``propose()``. The contract is intentionally
+    narrow: take a tool definition, return parsed tool arguments as a dict.
+    Vendor-specific shape translation lives inside the subclass.
+    """
+
+    @abstractmethod
+    def propose(
+        self,
+        system: str,
+        user: str,
+        tool_spec: dict,
+    ) -> dict:
+        """Forward the call to the LLM and return its tool call arguments.
+
+        Args:
+            system: System prompt sent to the LLM.
+            user: User message (already-rendered context plus instructions).
+            tool_spec: Tool definition the LLM is forced to call. Shape:
+                ``{"name": str, "description": str, "parameters": <JSON schema>}``.
+                Subclasses translate this to the vendor's tool format.
+
+        Returns:
+            The parsed arguments of the LLM's tool call as a dict mapping
+            hparam name to value, e.g. ``{"lr": 1e-3, "depth": 12}``.
+
+        Raises:
+            RuntimeError: If the LLM did not call the tool after retries
+                or returned an unparseable response.
+        """
