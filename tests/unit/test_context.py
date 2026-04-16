@@ -7,6 +7,18 @@ import pytest
 from llmtuna.context import Context
 
 
+@pytest.fixture
+def make_file(tmp_path):
+    """Factory: write a file under ``tmp_path`` and return its Path."""
+
+    def _make(name: str, body: str):
+        p = tmp_path / name
+        p.write_text(body)
+        return p
+
+    return _make
+
+
 # ============================================================
 # Construction
 # ============================================================
@@ -57,25 +69,22 @@ def test_add_does_not_set_path():
 # add_file()
 # ============================================================
 
-def test_add_file_reads_contents(tmp_path):
-    f = tmp_path / "note.txt"
-    f.write_text("file body")
+def test_add_file_reads_contents(make_file):
+    f = make_file("note.txt", "file body")
     ctx = Context()
     ctx.add_file(path=f)
     assert ctx.entries[0].text == "file body\n\n"
 
 
-def test_add_file_stores_path(tmp_path):
-    f = tmp_path / "note.txt"
-    f.write_text("body")
+def test_add_file_stores_path(make_file):
+    f = make_file("note.txt", "body")
     ctx = Context()
     ctx.add_file(path=f)
     assert ctx.entries[0].path == f
 
 
-def test_add_file_accepts_string_path(tmp_path):
-    f = tmp_path / "note.txt"
-    f.write_text("body")
+def test_add_file_accepts_string_path(make_file):
+    f = make_file("note.txt", "body")
     ctx = Context()
     ctx.add_file(path=str(f))
     assert ctx.entries[0].text == "body\n\n"
@@ -87,10 +96,9 @@ def test_add_file_raises_on_missing_file(tmp_path):
         ctx.add_file(path=tmp_path / "does-not-exist.txt")
 
 
-def test_add_file_snapshots_contents(tmp_path):
+def test_add_file_snapshots_contents(make_file):
     """Later edits to the file must not change the already-stored entry."""
-    f = tmp_path / "note.txt"
-    f.write_text("original")
+    f = make_file("note.txt", "original")
     ctx = Context()
     ctx.add_file(path=f)
     f.write_text("modified")
@@ -101,11 +109,9 @@ def test_add_file_snapshots_contents(tmp_path):
 # refresh()
 # ============================================================
 
-def test_refresh_no_args_rereads_all_files(tmp_path):
-    f1 = tmp_path / "a.txt"
-    f2 = tmp_path / "b.txt"
-    f1.write_text("a1")
-    f2.write_text("b1")
+def test_refresh_no_args_rereads_all_files(make_file):
+    f1 = make_file("a.txt", "a1")
+    f2 = make_file("b.txt", "b1")
     ctx = Context()
     ctx.add_file(path=f1)
     ctx.add_file(path=f2)
@@ -117,11 +123,9 @@ def test_refresh_no_args_rereads_all_files(tmp_path):
     assert ctx.entries[1].text == "b2\n\n"
 
 
-def test_refresh_specific_path_rereads_only_that_one(tmp_path):
-    f1 = tmp_path / "a.txt"
-    f2 = tmp_path / "b.txt"
-    f1.write_text("a1")
-    f2.write_text("b1")
+def test_refresh_specific_path_rereads_only_that_one(make_file):
+    f1 = make_file("a.txt", "a1")
+    f2 = make_file("b.txt", "b1")
     ctx = Context()
     ctx.add_file(path=f1)
     ctx.add_file(path=f2)
@@ -133,9 +137,8 @@ def test_refresh_specific_path_rereads_only_that_one(tmp_path):
     assert ctx.entries[1].text == "b1\n\n"
 
 
-def test_refresh_skips_text_only_entries(tmp_path):
-    f = tmp_path / "a.txt"
-    f.write_text("file body")
+def test_refresh_skips_text_only_entries(make_file):
+    f = make_file("a.txt", "file body")
     ctx = Context()
     ctx.add(text="just text")
     ctx.add_file(path=f)
@@ -152,9 +155,8 @@ def test_refresh_returns_zero_when_no_files():
     assert ctx.refresh() == 0
 
 
-def test_refresh_raises_on_deleted_file(tmp_path):
-    f = tmp_path / "a.txt"
-    f.write_text("body")
+def test_refresh_raises_on_deleted_file(make_file):
+    f = make_file("a.txt", "body")
     ctx = Context()
     ctx.add_file(path=f)
     f.unlink()
@@ -224,9 +226,8 @@ def test_to_dict_text_only_entry():
     assert ctx.to_dict() == {"entries": [{"text": "hello\n\n", "path": None}]}
 
 
-def test_to_dict_file_entry_serializes_path_as_string(tmp_path):
-    f = tmp_path / "note.txt"
-    f.write_text("body")
+def test_to_dict_file_entry_serializes_path_as_string(make_file):
+    f = make_file("note.txt", "body")
     ctx = Context()
     ctx.add_file(path=f)
     d = ctx.to_dict()
@@ -235,10 +236,9 @@ def test_to_dict_file_entry_serializes_path_as_string(tmp_path):
     assert isinstance(d["entries"][0]["path"], str)
 
 
-def test_to_dict_is_json_serializable(tmp_path):
+def test_to_dict_is_json_serializable(make_file):
     """to_dict() output must round-trip through json.dumps without a custom encoder."""
-    f = tmp_path / "note.txt"
-    f.write_text("body")
+    f = make_file("note.txt", "body")
     ctx = Context()
     ctx.add(text="text only")
     ctx.add_file(path=f)
@@ -254,9 +254,8 @@ def test_from_dict_reconstructs_text_only_entry():
     assert restored.entries[0].path is None
 
 
-def test_from_dict_reconstructs_file_entry(tmp_path):
-    f = tmp_path / "note.txt"
-    f.write_text("body")
+def test_from_dict_reconstructs_file_entry(make_file):
+    f = make_file("note.txt", "body")
     original = Context()
     original.add_file(path=f)
     restored = Context.from_dict(data=original.to_dict())
@@ -264,9 +263,8 @@ def test_from_dict_reconstructs_file_entry(tmp_path):
     assert restored.entries[0].path == f
 
 
-def test_round_trip_preserves_render(tmp_path):
-    f = tmp_path / "note.txt"
-    f.write_text("body")
+def test_round_trip_preserves_render(make_file):
+    f = make_file("note.txt", "body")
     original = Context()
     original.add(text="alpha")
     original.add_file(path=f)
