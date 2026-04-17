@@ -2,47 +2,58 @@
 
 LLM-driven hyperparameter optimization with a torch-style ask/tell API.
 
-`llmtuna` lets you optimize hyperparameters by having a large language model
-propose configurations, observe their empirical results, and iterate. The
-LLM sees a rolling text context — your architecture notes, prior trial
-results, the LLM's own past reasoning — and reasons over them to suggest
-the next configuration.
+`llmtuna` is a general-purpose hyperparameter optimizer: you describe a
+search space, point it at any system you can run and measure, and a large
+language model proposes configurations to try. It works for neural
+network training, classical ML (XGBoost, random forests, SVMs),
+reinforcement-learning agents, simulations, compiler/runtime flags —
+anything with knobs and a scalar metric.
+
+The LLM sees a rolling text context — whatever notes, code, papers, or
+prior trial results you choose to feed it — and reasons over them to
+suggest the next configuration.
 
 Inspired by work on LLMs-as-optimizers (Yang et al., 2023).
 
 ## Why this exists
 
 Classical samplers (Optuna's TPE, Ax/BoTorch, CARBS, hyperopt) are
-oblivious to architecture, scaling laws, prior literature, or anything
-the scientist knows but hasn't encoded as a prior. An LLM can read a
-file describing your model, see a paper's findings on similar setups,
-and incorporate that into proposals — for free.
+oblivious to domain knowledge, prior literature, or anything the
+scientist knows but hasn't encoded as a numerical prior. An LLM can
+read a file describing your system, look at related results, and
+incorporate that into proposals directly.
 
-The library is intentionally minimal. Three hyperparameter types
+The library is intentionally minimal: three hyperparameter types
 (`Float`, `Int`, `Choice`), one rolling text context, one provider
-abstraction, one `Tuner` class. No FLOP-scale machinery, no built-in
-W&B integration, no scheduler. Just the optimizer.
+abstraction, one `Tuner` class.
 
 ## Install
 
-```bash
-# With uv (recommended)
-uv add llmtuna
-
-# Or pip
-pip install llmtuna
-```
-
-For local development:
+Not on PyPI yet — install from a local clone using
+[uv](https://github.com/astral-sh/uv):
 
 ```bash
 git clone git@github.com:alexkstern/llmtuna.git
 cd llmtuna
 uv sync --extra dev
+```
+
+Run the test suite to confirm:
+
+```bash
 uv run pytest
 ```
 
+To use it from another project, point at the local checkout:
+
+```bash
+uv add --editable /path/to/llmtuna
+```
+
 ## Quickstart
+
+`llmtuna` makes no assumptions about what's behind your `train_and_eval`
+call — anything returning a scalar metric works.
 
 ```python
 import llmtuna as lt
@@ -50,30 +61,33 @@ import llmtuna as lt
 opt = lt.Tuner(
     provider=lt.OpenRouter(model="anthropic/claude-sonnet-4-6"),
     space=[
-        lt.Float(name="lr",    description="AdamW learning rate",
+        lt.Float(name="learning_rate",  description="learning rate",
                  bounds=(1e-6, 1.0), initial=1e-3),
-        lt.Int(name="depth",   description="number of transformer layers",
+        lt.Int(name="n_layers",         description="model depth",
                bounds=(1, 20)),
-        lt.Choice(name="act",  description="activation function",
-                  options=["relu", "gelu", "silu"]),
+        lt.Float(name="regularization", description="weight decay / penalty strength",
+                 bounds=(0.0, 0.1), initial=0.01),
     ],
     objective="minimize",
 )
 
-# Optional: tell the LLM what it's optimizing
-opt.context.add(text="GPT-2 style transformer, RoPE, Muon optimizer.")
-opt.context.add_file(path="docs/scaling_notes.md")
+# Optional: hand the LLM whatever context helps — code, notes, papers
+opt.context.add(text="brief description of your model and dataset")
+opt.context.add_file(path="train.py")
+opt.context.add_file(path="model.py")
+opt.context.add_file(path="dataloader.py")
+opt.context.add_file(path="docs/prior_results.md")
 
 # Optimization loop
 for _ in range(30):
     cfg = opt.suggest()                  # LLM proposes a config
-    val_loss = train_and_eval(**cfg)     # your training code
-    opt.observe(cfg=cfg, value=val_loss) # report back
+    metric = train_and_eval(**cfg)       # your training / evaluation code
+    opt.observe(cfg=cfg, value=metric)   # report back
 
 print(opt.best)         # {"cfg": {...}, "value": ...}
 print(opt.history)      # list of all Trials in chronological order
 
-opt.save(path="run.json")               # full transcript + state
+opt.save(path="run.json")                # full transcript + state
 ```
 
 ## Concepts
@@ -117,10 +131,12 @@ A first-class, ordered, append-only text log shown to the LLM on every
 `suggest()`. Add free-form text or snapshot files:
 
 ```python
-opt.context.add(text="found that lr > 1e-2 diverges with depth=12")
-opt.context.add_file(path="model.py")        # snapshot at call time
-opt.context.refresh()                         # re-read all snapshotted files
-opt.context.refresh(path="model.py")          # or a specific one
+opt.context.add(text="prior runs showed instability when learning_rate > 1e-2")
+opt.context.add_file(path="model.py")             # snapshot at call time
+opt.context.add_file(path="train.py")
+opt.context.add_file(path="dataloader.py")
+opt.context.refresh()                              # re-read all snapshotted files
+opt.context.refresh(path="model.py")               # or a specific one
 ```
 
 The Tuner also auto-appends the LLM's full response (reasoning + content
@@ -168,7 +184,7 @@ The system prompt and the three formatter functions (`format_proposal`,
 opt = lt.Tuner(
     provider=...,
     space=[...],
-    system_prompt="You are an expert in transformer pretraining...",
+    system_prompt="You are an expert hyperparameter tuner for this domain...",
     format_result=lambda cfg, value, note: f"trial: {cfg} -> {value}",
 )
 ```
@@ -200,11 +216,11 @@ not exported at the top level since it is a test utility):
 from llmtuna.providers.mock import MockProvider
 
 provider = MockProvider(responses=[
-    {"lr": 1e-3, "depth": 5},
-    {"lr": 5e-4, "depth": 8},
+    {"learning_rate": 1e-3, "n_layers": 5, "regularization": 0.01},
+    {"learning_rate": 5e-4, "n_layers": 8, "regularization": 0.005},
 ])
 opt = lt.Tuner(provider=provider, space=[...])
-cfg = opt.suggest()    # returns {"lr": 1e-3, "depth": 5}
+cfg = opt.suggest()    # returns {"learning_rate": 1e-3, "n_layers": 5, ...}
 ```
 
 ## Citation
