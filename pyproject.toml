@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "llmtuna"
 version = "0.1.0"
 description = "LLM-driven hyperparameter optimization with a torch-style ask/tell API."
+readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Alex Stern", email = "alexkstern@gmail.com"}]
