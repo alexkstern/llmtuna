@@ -13,18 +13,12 @@ audit.
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from llmtuna import defaults
 from llmtuna.context import Context
 from llmtuna.providers.base import Provider
-from llmtuna.space import Choice, Float, Int, Param
-
-_PARAM_TYPES: dict[str, type[Param]] = {
-    "Float": Float,
-    "Int": Int,
-    "Choice": Choice,
-}
+from llmtuna.space import Param, param_from_dict, param_to_dict
 
 
 @dataclass
@@ -40,23 +34,6 @@ class Trial:
     cfg: dict
     value: float
     note: str | None = None
-
-
-def _serialize_param(p: Param) -> dict:
-    """Convert a Param to a JSON-safe dict, preserving its concrete type."""
-    d = asdict(p)
-    d["__type__"] = type(p).__name__
-    return d
-
-
-def _deserialize_param(d: dict) -> Param:
-    """Inverse of ``_serialize_param``."""
-    d = dict(d)
-    type_name = d.pop("__type__")
-    cls = _PARAM_TYPES[type_name]
-    if "bounds" in d and d["bounds"] is not None:
-        d["bounds"] = tuple(d["bounds"])
-    return cls(**d)
 
 
 class Tuner:
@@ -94,7 +71,8 @@ class Tuner:
         self,
         provider: Provider,
         space: list[Param],
-        objective: str = "minimize",
+        *,
+        objective: Literal["minimize", "maximize"] = "minimize",
         max_retries: int = 3,
         system_prompt: str | None = None,
         format_proposal: Callable[[dict], str] | None = None,
@@ -282,12 +260,9 @@ class Tuner:
             "version": 1,
             "objective": self.objective,
             "max_retries": self.max_retries,
-            "space": [_serialize_param(p) for p in self.space],
+            "space": [param_to_dict(p) for p in self.space],
             "context": self.context.to_dict(),
-            "history": [
-                {"cfg": t.cfg, "value": t.value, "note": t.note}
-                for t in self.history
-            ],
+            "history": [asdict(t) for t in self.history],
         }
         Path(path).write_text(json.dumps(data, indent=2))
 
@@ -307,7 +282,7 @@ class Tuner:
             (they are not serialized).
         """
         data = json.loads(Path(path).read_text())
-        space = [_deserialize_param(d) for d in data["space"]]
+        space = [param_from_dict(d) for d in data["space"]]
         opt = cls(
             provider=provider,
             space=space,

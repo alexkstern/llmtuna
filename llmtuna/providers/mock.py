@@ -14,9 +14,12 @@ def _canonicalize(response: dict) -> dict:
 
     For test convenience, callers may queue either a bare ``tool_args``
     dict (e.g. ``{"lr": 0.001}``) or the full response shape
-    (``{"reasoning": ..., "content": ..., "tool_args": ...}``). This helper
-    promotes the bare form to the full form by filling missing keys with
-    sensible defaults.
+    (``{"reasoning": ..., "content": ..., "tool_args": ...}``). The
+    presence of a top-level ``"tool_args"`` key signals the full form;
+    otherwise the dict is treated as bare ``tool_args``.
+
+    Note: this disallows hyperparameters literally named ``tool_args`` —
+    the collision is a deliberate, low-cost trade for ergonomic tests.
 
     Args:
         response: A dict that is either bare ``tool_args`` or the full
@@ -26,9 +29,7 @@ def _canonicalize(response: dict) -> dict:
         A dict with all three keys: ``reasoning`` (str), ``content`` (str),
         ``tool_args`` (dict).
     """
-    if "tool_args" in response and (
-        "reasoning" in response or "content" in response
-    ):
+    if "tool_args" in response:
         return {
             "reasoning": response.get("reasoning", ""),
             "content": response.get("content", ""),

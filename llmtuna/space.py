@@ -1,7 +1,7 @@
 """Hyperparameter type definitions: Float, Int, Choice."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 
@@ -168,3 +168,43 @@ class Choice:
 
 
 Param = Float | Int | Choice
+
+
+_PARAM_TYPES: dict[str, type] = {"Float": Float, "Int": Int, "Choice": Choice}
+
+
+def param_to_dict(p: Param) -> dict:
+    """Serialize a Param to a JSON-safe dict, preserving its concrete type.
+
+    Args:
+        p: A ``Float``, ``Int``, or ``Choice`` instance.
+
+    Returns:
+        A dict containing all of ``p``'s dataclass fields plus a
+        ``"__type__"`` key holding the concrete class name. Suitable for
+        ``json.dumps``.
+    """
+    d = asdict(p)
+    d["__type__"] = type(p).__name__
+    return d
+
+
+def param_from_dict(d: dict) -> Param:
+    """Reconstruct a Param from ``param_to_dict()`` output.
+
+    Args:
+        d: A dict produced by ``param_to_dict()``. Must contain a
+            ``"__type__"`` key naming one of the known Param subclasses.
+
+    Returns:
+        The reconstructed ``Float``, ``Int``, or ``Choice`` instance.
+
+    Raises:
+        KeyError: If ``"__type__"`` is missing or unknown.
+    """
+    d = dict(d)
+    type_name = d.pop("__type__")
+    cls = _PARAM_TYPES[type_name]
+    if "bounds" in d and d["bounds"] is not None:
+        d["bounds"] = tuple(d["bounds"])
+    return cls(**d)

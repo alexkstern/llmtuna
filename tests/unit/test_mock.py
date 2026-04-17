@@ -72,6 +72,15 @@ def test_full_response_shape_with_partial_keys_filled():
     }
 
 
+def test_full_response_shape_with_only_tool_args_not_double_wrapped():
+    """Regression: a dict with only 'tool_args' key is full shape, not bare.
+    Previously this was double-wrapped into ``{"tool_args": {"tool_args":
+    {"lr": 0.001}}}`` due to a too-strict heuristic."""
+    p = MockProvider(responses=[{"tool_args": {"lr": 0.001}}])
+    result = p.propose(system="", user="", tool_spec={})
+    assert result == {"reasoning": "", "content": "", "tool_args": {"lr": 0.001}}
+
+
 # ============================================================
 # propose() — recording call arguments
 # ============================================================
