@@ -368,6 +368,47 @@ def test_load_round_trips_context(tmp_path):
     assert restored.context.render() == opt.context.render()
 
 
+def test_load_without_overrides_uses_defaults(tmp_path):
+    """Custom formatters from the original Tuner are NOT serialized.
+    Without re-passing them, load() falls back to defaults."""
+    from llmtuna import defaults as d
+
+    original = lt.Tuner(
+        provider=MockProvider(responses=[]),
+        space=_basic_space(),
+        system_prompt="custom prompt",
+        format_proposal=lambda r: "CUSTOM",
+    )
+    save_path = tmp_path / "state.json"
+    original.save(path=save_path)
+
+    restored = lt.Tuner.load(path=save_path, provider=MockProvider(responses=[]))
+    assert restored.system_prompt == d.SYSTEM_PROMPT
+    assert restored.format_proposal is d.format_proposal
+
+
+def test_load_with_overrides_applies_them(tmp_path):
+    """Re-passing custom formatters at load() time restores them."""
+    custom_sys = "custom prompt v2"
+    custom_proposal = lambda r: "CUSTOM_AT_LOAD"  # noqa: E731
+
+    original = lt.Tuner(
+        provider=MockProvider(responses=[]),
+        space=_basic_space(),
+    )
+    save_path = tmp_path / "state.json"
+    original.save(path=save_path)
+
+    restored = lt.Tuner.load(
+        path=save_path,
+        provider=MockProvider(responses=[]),
+        system_prompt=custom_sys,
+        format_proposal=custom_proposal,
+    )
+    assert restored.system_prompt == custom_sys
+    assert restored.format_proposal is custom_proposal
+
+
 def test_load_round_trips_space_with_choice(tmp_path):
     """Param subtype info must survive the round trip."""
     opt = lt.Tuner(

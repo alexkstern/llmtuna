@@ -267,19 +267,37 @@ class Tuner:
         Path(path).write_text(json.dumps(data, indent=2))
 
     @classmethod
-    def load(cls, path: str | Path, provider: Provider) -> "Tuner":
+    def load(
+        cls,
+        path: str | Path,
+        provider: Provider,
+        *,
+        system_prompt: str | None = None,
+        format_proposal: Callable[[dict], str] | None = None,
+        format_result: Callable[[dict, float, str | None], str] | None = None,
+        build_user_message: Callable[[str, list[str], str], str] | None = None,
+    ) -> "Tuner":
         """Reconstruct a Tuner from a JSON file written by ``save()``.
+
+        Custom formatters and the system prompt are NOT serialized (functions
+        and arbitrary strings can't always round-trip through JSON cleanly).
+        If the original Tuner used custom overrides, **pass them again here**
+        — otherwise the defaults from ``llmtuna.defaults`` are used and you
+        will silently lose your customizations.
 
         Args:
             path: Source file path.
             provider: A fresh ``Provider`` to attach. The provider is NOT
-                serialized in the save file (see ``save``), so the caller
-                must supply one.
+                serialized in the save file (no API keys on disk).
+            system_prompt: Override for the default system prompt. Pass the
+                same string you used when constructing the original Tuner.
+            format_proposal: Override for the default proposal formatter.
+            format_result: Override for the default result formatter.
+            build_user_message: Override for the default user-message builder.
 
         Returns:
             A new ``Tuner`` with the saved space, objective, context, and
-            history. Custom formatters/system_prompt revert to defaults
-            (they are not serialized).
+            history, plus any formatter overrides you supplied.
         """
         data = json.loads(Path(path).read_text())
         space = [param_from_dict(d) for d in data["space"]]
@@ -288,6 +306,10 @@ class Tuner:
             space=space,
             objective=data["objective"],
             max_retries=data["max_retries"],
+            system_prompt=system_prompt,
+            format_proposal=format_proposal,
+            format_result=format_result,
+            build_user_message=build_user_message,
         )
         opt.context = Context.from_dict(data=data["context"])
         opt.history = [Trial(**t) for t in data["history"]]
