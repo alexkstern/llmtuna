@@ -1,19 +1,49 @@
 """MockProvider — test double for ``Provider`` that returns canned responses.
 
 Use in unit tests to exercise ``Tuner`` logic without hitting a real LLM
-API. Initialize with a list of dicts; each call to ``propose()`` pops the
-next one and records the call args for later assertion.
+API. Initialize with a list of dicts (each in the ``Provider.propose``
+return shape); each call to ``propose()`` pops the next one and records
+the call args for later assertion.
 """
 
 from llmtuna.providers.base import Provider
+
+
+def _canonicalize(response: dict) -> dict:
+    """Coerce a queued response dict into the full ``Provider.propose`` shape.
+
+    For test convenience, callers may queue either a bare ``tool_args``
+    dict (e.g. ``{"lr": 0.001}``) or the full response shape
+    (``{"reasoning": ..., "content": ..., "tool_args": ...}``). This helper
+    promotes the bare form to the full form by filling missing keys with
+    sensible defaults.
+
+    Args:
+        response: A dict that is either bare ``tool_args`` or the full
+            ``Provider.propose`` return shape.
+
+    Returns:
+        A dict with all three keys: ``reasoning`` (str), ``content`` (str),
+        ``tool_args`` (dict).
+    """
+    if "tool_args" in response and (
+        "reasoning" in response or "content" in response
+    ):
+        return {
+            "reasoning": response.get("reasoning", ""),
+            "content": response.get("content", ""),
+            "tool_args": response["tool_args"],
+        }
+    return {"reasoning": "", "content": "", "tool_args": response}
 
 
 class MockProvider(Provider):
     """Provider that returns queued responses and records every call.
 
     Attributes:
-        responses: Remaining queued responses; ``propose()`` pops from
-            the front on each call.
+        responses: Remaining queued responses (in the full ``Provider.propose``
+            shape after construction-time canonicalization). ``propose()``
+            pops from the front on each call.
         calls: Cumulative log of every ``propose()`` call's arguments,
             in order. Each entry is a dict with keys ``system``,
             ``user``, ``tool_spec``.
@@ -24,11 +54,13 @@ class MockProvider(Provider):
 
         Args:
             responses: Sequence of dicts to return from successive
-                ``propose()`` calls (one per call, in order). The list is
-                copied so external mutations after construction do not
-                affect the queue.
+                ``propose()`` calls. Each may be either a bare ``tool_args``
+                dict (e.g. ``{"lr": 0.001}``) or the full response shape
+                (``{"reasoning": ..., "content": ..., "tool_args": ...}``).
+                Bare dicts are canonicalized at construction time. The list
+                is copied so external mutations do not affect the queue.
         """
-        self.responses = list(responses)
+        self.responses: list[dict] = [_canonicalize(r) for r in responses]
         self.calls: list[dict] = []
 
     def propose(self, system: str, user: str, tool_spec: dict) -> dict:
@@ -40,7 +72,8 @@ class MockProvider(Provider):
             tool_spec: Tool definition (recorded only).
 
         Returns:
-            The next dict from the response queue.
+            The next dict from the response queue, in the full
+            ``Provider.propose`` shape.
 
         Raises:
             IndexError: If the queue is empty (no more canned responses

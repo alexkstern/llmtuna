@@ -18,29 +18,58 @@ def test_mock_provider_is_a_provider():
 
 
 # ============================================================
-# propose() — returning queued responses
+# propose() — returning queued responses (bare tool_args canonicalized)
 # ============================================================
 
-def test_returns_queued_response():
+def test_returns_queued_response_in_full_shape():
+    """Bare tool_args input is promoted to the full response shape."""
     p = MockProvider(responses=[{"lr": 0.001}])
     result = p.propose(system="sys", user="usr", tool_spec={"name": "t"})
-    assert result == {"lr": 0.001}
+    assert result == {"reasoning": "", "content": "", "tool_args": {"lr": 0.001}}
 
 
 def test_pops_responses_in_order():
     p = MockProvider(responses=[{"lr": 1}, {"lr": 2}, {"lr": 3}])
-    assert p.propose(system="", user="", tool_spec={}) == {"lr": 1}
-    assert p.propose(system="", user="", tool_spec={}) == {"lr": 2}
-    assert p.propose(system="", user="", tool_spec={}) == {"lr": 3}
+    assert p.propose(system="", user="", tool_spec={})["tool_args"] == {"lr": 1}
+    assert p.propose(system="", user="", tool_spec={})["tool_args"] == {"lr": 2}
+    assert p.propose(system="", user="", tool_spec={})["tool_args"] == {"lr": 3}
 
 
-def test_response_dict_passes_through_unchanged():
-    """Complex nested structures pass through verbatim — MockProvider
-    does not interpret or transform the queued response."""
-    response = {"lr": 0.001, "schedule": {"warmup": 100, "decay": "cosine"}}
-    p = MockProvider(responses=[response])
+def test_response_dict_passes_through_unchanged_in_tool_args():
+    """Complex nested structures inside tool_args pass through verbatim."""
+    inner = {"lr": 0.001, "schedule": {"warmup": 100, "decay": "cosine"}}
+    p = MockProvider(responses=[inner])
     result = p.propose(system="", user="", tool_spec={})
-    assert result == response
+    assert result["tool_args"] == inner
+
+
+# ============================================================
+# propose() — full response shape preserved
+# ============================================================
+
+def test_full_response_shape_preserved():
+    """Queued responses already in full shape are returned as-is."""
+    full = {
+        "reasoning": "I think lr=0.001 is a good start.",
+        "content": "",
+        "tool_args": {"lr": 0.001},
+    }
+    p = MockProvider(responses=[full])
+    result = p.propose(system="", user="", tool_spec={})
+    assert result == full
+
+
+def test_full_response_shape_with_partial_keys_filled():
+    """Full shape with only some optional keys gets defaults filled."""
+    p = MockProvider(responses=[
+        {"reasoning": "thinking...", "tool_args": {"lr": 0.5}}
+    ])
+    result = p.propose(system="", user="", tool_spec={})
+    assert result == {
+        "reasoning": "thinking...",
+        "content": "",
+        "tool_args": {"lr": 0.5},
+    }
 
 
 # ============================================================
@@ -91,8 +120,8 @@ def test_raises_immediately_on_empty_queue():
 def test_instances_are_independent():
     p1 = MockProvider(responses=[{"x": 1}])
     p2 = MockProvider(responses=[{"x": 2}])
-    assert p1.propose(system="", user="", tool_spec={}) == {"x": 1}
-    assert p2.propose(system="", user="", tool_spec={}) == {"x": 2}
+    assert p1.propose(system="", user="", tool_spec={})["tool_args"] == {"x": 1}
+    assert p2.propose(system="", user="", tool_spec={})["tool_args"] == {"x": 2}
     assert len(p1.calls) == 1
     assert len(p2.calls) == 1
 
@@ -103,7 +132,7 @@ def test_responses_list_is_copied_at_construction():
     p = MockProvider(responses=queue)
     queue.append({"x": 3})
     queue.clear()
-    assert p.propose(system="", user="", tool_spec={}) == {"x": 1}
-    assert p.propose(system="", user="", tool_spec={}) == {"x": 2}
+    assert p.propose(system="", user="", tool_spec={})["tool_args"] == {"x": 1}
+    assert p.propose(system="", user="", tool_spec={})["tool_args"] == {"x": 2}
     with pytest.raises(IndexError):
         p.propose(system="", user="", tool_spec={})

@@ -37,8 +37,19 @@ class Provider(ABC):
                 Subclasses translate this to the vendor's tool format.
 
         Returns:
-            The parsed arguments of the LLM's tool call as a dict mapping
-            hparam name to value, e.g. ``{"lr": 1e-3, "depth": 12}``.
+            A dict with three keys:
+
+            - ``"reasoning"`` (str): The LLM's reasoning chain. Empty
+              string if reasoning was disabled or unsupported by the model.
+            - ``"content"`` (str): Any non-tool text the LLM emitted.
+              Often empty when the tool call is forced.
+            - ``"tool_args"`` (dict): The parsed tool call arguments
+              mapping hparam name to value, e.g.
+              ``{"lr": 1e-3, "depth": 12}``.
+
+            All three keys are always present. The Tuner appends the full
+            response (including reasoning) to the Context so the LLM
+            sees its own prior thinking on subsequent calls.
 
         Raises:
             Exception: Subclasses signal failures by raising — the type
