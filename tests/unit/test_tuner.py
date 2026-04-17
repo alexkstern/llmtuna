@@ -204,6 +204,35 @@ def test_suggest_raises_after_max_retries_exhausted():
     assert len(p.calls) == 3
 
 
+def test_suggest_retries_on_extra_unknown_param():
+    """First response includes a phantom param; retry then succeeds."""
+    p = MockProvider(
+        responses=[
+            {"lr": 0.001, "depth": 5, "momentum": 0.9},  # extra "momentum"
+            {"lr": 0.001, "depth": 5},                   # valid
+        ]
+    )
+    opt = lt.Tuner(provider=p, space=_basic_space(), max_retries=3)
+    cfg = opt.suggest()
+    assert cfg == {"lr": 0.001, "depth": 5}
+    assert len(p.calls) == 2
+
+
+def test_suggest_retry_message_lists_extra_params():
+    p = MockProvider(
+        responses=[
+            {"lr": 0.001, "depth": 5, "momentum": 0.9, "weight_init": "kaiming"},
+            {"lr": 0.001, "depth": 5},
+        ]
+    )
+    opt = lt.Tuner(provider=p, space=_basic_space(), max_retries=3)
+    opt.suggest()
+    second_user_msg = p.calls[1]["user"]
+    assert "Unexpected parameters" in second_user_msg
+    assert "momentum" in second_user_msg
+    assert "weight_init" in second_user_msg
+
+
 def test_suggest_raises_on_missing_required_param():
     p = MockProvider(
         responses=[

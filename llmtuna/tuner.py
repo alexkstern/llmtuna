@@ -147,8 +147,17 @@ class Tuner:
             A new dict mapping each param name to its validated/coerced value.
 
         Raises:
-            ValueError: On the first validation failure encountered.
+            ValueError: On the first validation failure encountered. Caught
+                by ``suggest()``'s retry loop and fed back to the LLM as a
+                correction message.
         """
+        expected = {p.name for p in self.space}
+        extras = set(tool_args) - expected
+        if extras:
+            raise ValueError(
+                f"Unexpected parameters in tool_args: {sorted(extras)}. "
+                f"The search space defines only: {sorted(expected)}."
+            )
         cfg: dict[str, Any] = {}
         for p in self.space:
             if p.name not in tool_args:
