@@ -1,0 +1,194 @@
+"""OpenRouter provider — talks to OpenRouter via the OpenAI Python SDK.
+
+OpenRouter is the OpenAI-compatible aggregator recommended for v1. The
+class translates llmtuna's neutral tool spec into OpenAI's function-
+calling format, forces the LLM to call the proposal tool, captures any
+reasoning tokens the model emits, and returns the parsed result in the
+``Provider.propose`` shape.
+
+Vendor-specific exceptions from the openai SDK (``openai.BadRequestError``
+for context overflow, ``openai.APIError`` for network/server issues,
+etc.) propagate unchanged. Catch them at the call site if you need to
+handle specific failure modes.
+"""
+
+import json
+import os
+
+from openai import OpenAI
+
+from llmtuna.providers.base import Provider
+
+
+class OpenRouter(Provider):
+    """Provider that calls OpenRouter via the OpenAI Python SDK.
+
+    Forces the LLM to call the provided tool via ``tool_choice`` and
+    captures reasoning tokens when the model supports them.
+
+    Attributes:
+        model: OpenRouter model id, e.g. ``"anthropic/claude-sonnet-4-6"``.
+        thinking_budget: Max reasoning tokens. ``0`` disables reasoning.
+        max_tokens: Max output tokens for the model's response.
+        max_retries: Retries on empty/no-choice responses (transient).
+        extra_body: Dict forwarded as raw JSON in the request body for
+            vendor-specific knobs.
+        base_url: API endpoint (defaults to OpenRouter).
+    """
+
+    DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        api_key: str | None = None,
+        thinking_budget: int = 10000,
+        max_tokens: int = 2000,
+        max_retries: int = 3,
+        extra_body: dict | None = None,
+        base_url: str | None = None,
+    ):
+        """Initialize the OpenRouter provider.
+
+        Args:
+            model: OpenRouter model id (e.g. ``"anthropic/claude-sonnet-4-6"``).
+            api_key: API key. Falls back to ``OPENROUTER_API_KEY`` env var.
+            thinking_budget: Max reasoning tokens. Set ``0`` to disable
+                reasoning (faster, cheaper, no thinking trace).
+            max_tokens: Max output tokens.
+            max_retries: Number of times to retry on transient empty
+                responses (API returned no choices).
+            extra_body: Dict forwarded as raw JSON in the request body
+                for vendor-specific knobs. The reasoning config is
+                injected automatically when ``thinking_budget > 0``;
+                user-supplied keys take precedence.
+            base_url: API endpoint. Defaults to OpenRouter; set to
+                another OpenAI-compatible endpoint to redirect.
+
+        Raises:
+            ValueError: If no API key is found (neither ``api_key`` nor
+                ``OPENROUTER_API_KEY`` env var).
+        """
+        key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise ValueError(
+                "OpenRouter: no API key — pass api_key= or set OPENROUTER_API_KEY"
+            )
+        self.model = model
+        self.thinking_budget = thinking_budget
+        self.max_tokens = max_tokens
+        self.max_retries = max_retries
+        self.extra_body = extra_body or {}
+        self.base_url = base_url or self.DEFAULT_BASE_URL
+        self._client = OpenAI(base_url=self.base_url, api_key=key)
+
+    def propose(self, system: str, user: str, tool_spec: dict) -> dict:
+        """Call the LLM and return the parsed proposal.
+
+        Forces the LLM to call ``tool_spec["name"]`` via ``tool_choice``,
+        retries up to ``max_retries`` times on empty responses, then
+        parses the message into the ``Provider.propose`` shape.
+
+        Args:
+            system: System prompt.
+            user: User message.
+            tool_spec: Neutral tool spec
+                ``{"name": str, "description": str, "parameters": <JSON schema>}``.
+                Translated to OpenAI's function-calling format internally.
+
+        Returns:
+            ``{"reasoning": str, "content": str, "tool_args": dict}``.
+
+        Raises:
+            RuntimeError: If the LLM did not call the forced tool, tool
+                arguments are not valid JSON, or the API returned no
+                choices after ``max_retries`` retries.
+            openai.OpenAIError: Vendor SDK exceptions (network errors,
+                bad-request, context overflow, etc.) propagate unchanged.
+        """
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        oai_tool = {
+            "type": "function",
+            "function": {
+                "name": tool_spec["name"],
+                "description": tool_spec["description"],
+                "parameters": tool_spec["parameters"],
+            },
+        }
+        kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            "tools": [oai_tool],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": tool_spec["name"]},
+            },
+        }
+        body = dict(self.extra_body)
+        if self.thinking_budget > 0:
+            body.setdefault("reasoning", {"max_tokens": self.thinking_budget})
+        if body:
+            kwargs["extra_body"] = body
+
+        response = None
+        for _ in range(self.max_retries):
+            response = self._client.chat.completions.create(**kwargs)
+            if response.choices:
+                break
+        if response is None or not response.choices:
+            raise RuntimeError(
+                f"OpenRouter: no choices returned after {self.max_retries} attempts"
+            )
+
+        return self._parse_message(response.choices[0].message)
+
+    def _parse_message(self, msg) -> dict:
+        """Parse an OpenAI-compatible message into the ``Provider.propose`` shape.
+
+        Args:
+            msg: The ``message`` field from a chat completions response.
+
+        Returns:
+            ``{"reasoning": str, "content": str, "tool_args": dict}``.
+
+        Raises:
+            RuntimeError: If no tool call is present, or if tool arguments
+                are not valid JSON.
+        """
+        reasoning = ""
+        if getattr(msg, "reasoning", None):
+            reasoning = msg.reasoning
+        elif getattr(msg, "reasoning_details", None):
+            for detail in msg.reasoning_details:
+                if hasattr(detail, "text"):
+                    reasoning += detail.text or ""
+                elif isinstance(detail, dict):
+                    if detail.get("type") == "reasoning.text":
+                        reasoning += detail.get("text", "")
+
+        content = msg.content or ""
+
+        if not getattr(msg, "tool_calls", None):
+            raise RuntimeError(
+                "OpenRouter: forced tool was not called. Model returned "
+                f"text content instead: {content[:200]!r}"
+            )
+        tc = msg.tool_calls[0]
+        try:
+            tool_args = json.loads(tc.function.arguments)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                "OpenRouter: tool arguments not valid JSON: "
+                f"{tc.function.arguments[:200]!r}"
+            ) from e
+
+        return {
+            "reasoning": reasoning,
+            "content": content,
+            "tool_args": tool_args,
+        }
