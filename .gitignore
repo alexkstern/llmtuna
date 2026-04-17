@@ -34,3 +34,6 @@ Thumbs.db
 # Local notes (not for the repo)
 CLAUDE.md
 .claude/
+SANDBOX_NOTES.md
+*.json
+!tests/**/*.json
