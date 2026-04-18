@@ -11,7 +11,13 @@ The LLM sees a rolling text context — whatever notes, code, papers, or
 prior trial results you choose to feed it — and reasons over them to
 suggest the next configuration.
 
-Inspired by work on LLMs-as-optimizers (Yang et al., 2023).
+Inspired by work on LLMs-as-optimizers (Yang et al., 2023) and
+Karpathy's [autoresearch](https://github.com/karpathy/autoresearch).
+`llmtuna` is purpose-built for the *config-in / scalar-out* loop — every
+iteration produces a hyperparameter configuration evaluated against a
+scalar metric. For more open-ended LLM-driven research workflows
+(generate code, run experiments, change strategies), autoresearch is
+the better fit.
 
 ## Why this exists
 
