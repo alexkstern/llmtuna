@@ -133,9 +133,9 @@ retry.
 
 ### `Context`
 
-A first-class, ordered, append-only text log shown to the LLM on every
-`suggest()`. You add free-form text or snapshot files at any point —
-before the loop or in between trials:
+A first-class, ordered text log shown to the LLM on every `suggest()`.
+You add free-form text or snapshot files at any point — before the loop
+or in between trials:
 
 ```python
 opt.context.add(text="prior runs showed instability when learning_rate > 1e-2")
@@ -145,9 +145,17 @@ opt.context.add_file(path="model.py")     # reads the file NOW; stores its conte
 Files are snapshotted at the time of the call. If you've since edited a
 file on disk and want the LLM to see the new contents on the next
 `suggest()`, call `opt.context.refresh()` (re-reads all file-backed
-entries) or `opt.context.refresh(path="model.py")` (just one). It does
-**not** delete anything — entries are append-only; refresh updates the
-stored text in place.
+entries) or `opt.context.refresh(path="model.py")` (just one). Refresh
+updates the stored text in place — it doesn't add or remove entries.
+
+You can also prune the context — useful if a trial result was buggy or
+you want to reset between phases:
+
+```python
+opt.context.pop(index=-1)   # remove the most recent entry
+opt.context.pop(index=3)    # remove a specific one
+opt.context.clear()         # remove everything
+```
 
 The Tuner also auto-appends the LLM's full response (reasoning + content
 + proposed config) on every `suggest()`, and the trial result on every

@@ -165,6 +165,65 @@ def test_refresh_raises_on_deleted_file(make_file):
 
 
 # ============================================================
+# pop() / clear()
+# ============================================================
+
+def test_pop_default_removes_last():
+    ctx = Context()
+    ctx.add(text="a")
+    ctx.add(text="b")
+    ctx.add(text="c")
+    removed = ctx.pop()
+    assert removed.text == "c\n\n"
+    assert [e.text for e in ctx.entries] == ["a\n\n", "b\n\n"]
+
+
+def test_pop_index_removes_that_one():
+    ctx = Context()
+    ctx.add(text="a")
+    ctx.add(text="b")
+    ctx.add(text="c")
+    removed = ctx.pop(index=0)
+    assert removed.text == "a\n\n"
+    assert [e.text for e in ctx.entries] == ["b\n\n", "c\n\n"]
+
+
+def test_pop_negative_index():
+    ctx = Context()
+    ctx.add(text="a")
+    ctx.add(text="b")
+    ctx.add(text="c")
+    removed = ctx.pop(index=-2)
+    assert removed.text == "b\n\n"
+
+
+def test_pop_on_empty_raises():
+    with pytest.raises(IndexError):
+        Context().pop()
+
+
+def test_pop_out_of_range_raises():
+    ctx = Context()
+    ctx.add(text="a")
+    with pytest.raises(IndexError):
+        ctx.pop(index=5)
+
+
+def test_clear_removes_all():
+    ctx = Context()
+    ctx.add(text="a")
+    ctx.add(text="b")
+    ctx.clear()
+    assert len(ctx) == 0
+
+
+def test_clear_on_empty_is_noop():
+    ctx = Context()
+    ctx.clear()
+    assert len(ctx) == 0
+
+
+# ============================================================
 # render()
 # ============================================================
 

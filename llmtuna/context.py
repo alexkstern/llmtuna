@@ -30,12 +30,13 @@ class Entry:
 
 
 class Context:
-    """Ordered, append-only text log fed to the LLM.
+    """Ordered, mutable text log fed to the LLM.
 
     The Context is the canonical "what does the LLM know" object. Add
     arbitrary text via ``add()``, snapshot files via ``add_file()``,
-    re-read snapshotted files via ``refresh()``. The full content is
-    serialized into the user message on each ``Tuner.suggest()`` call.
+    re-read snapshotted files via ``refresh()``, and prune via
+    ``pop()`` / ``clear()``. The full content is serialized into the
+    user message on each ``Tuner.suggest()`` call.
 
     Internally this is just a list of Entry records. There is no taxonomy
     of entry kinds — anything destined for the LLM is plain text. The
@@ -109,6 +110,34 @@ class Context:
             entry.text = entry.path.read_text() + _ENTRY_SUFFIX
             count += 1
         return count
+
+    def pop(self, index: int = -1) -> Entry:
+        """Remove and return the entry at the given position.
+
+        Use this to prune entries you no longer want the LLM to see — a
+        trial result you've decided was buggy, stale advice that's
+        confusing the search, an oversized file snapshot, etc.
+
+        Args:
+            index: Position to remove. Negative indexes count from the
+                end. Default ``-1`` removes the most recent entry.
+
+        Returns:
+            The removed ``Entry``.
+
+        Raises:
+            IndexError: If the context is empty or the index is out of
+                range.
+        """
+        return self.entries.pop(index)
+
+    def clear(self) -> None:
+        """Remove every entry from the context.
+
+        Useful when reusing the same ``Tuner`` across distinct phases of
+        a run and you want a clean slate for the LLM.
+        """
+        self.entries.clear()
 
     def render(self) -> str:
         """Concatenate all entries into the single text block sent to the LLM.
