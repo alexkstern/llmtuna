@@ -25,6 +25,21 @@ class Float:
                 raise ValueError(
                     f"Float '{self.name}': initial {self.initial} outside bounds {self.bounds}"
                 )
+        self._children: dict[Any, list["Param"]] = {}
+
+    def when(self, value: Any, *children: "Param") -> "Float":
+        """Declare children that are only active when this param equals ``value``.
+
+        Args:
+            value: The parent value that activates these children.
+            *children: One or more ``Param`` instances that are required
+                when this param's value equals ``value``.
+
+        Returns:
+            ``self``, for chaining.
+        """
+        self._children.setdefault(value, []).extend(children)
+        return self
 
     def validate(self, value: Any) -> float:
         if isinstance(value, bool):
@@ -50,6 +65,9 @@ class Float:
             desc += f" Range: [{self.bounds[0]}, {self.bounds[1]}]."
         if self.initial is not None:
             desc += f" Suggested starting point: {self.initial}."
+        for value, children in self._children.items():
+            names = ", ".join(c.name for c in children)
+            desc += f" When {value!r}: also include {names}."
         return {"type": "number", "description": desc}
 
     def summary(self) -> str:
@@ -58,7 +76,14 @@ class Float:
             parts.append(f"bounds={self.bounds}")
         if self.initial is not None:
             parts.append(f"initial={self.initial}")
-        return ", ".join(parts)
+        base = ", ".join(parts)
+        if not self._children:
+            return base
+        lines = [base]
+        for value, children in self._children.items():
+            for child in children:
+                lines.append(f"  when {value!r}: {child.summary()}")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -92,6 +117,21 @@ class Int:
                     raise ValueError(
                         f"Int '{self.name}': initial {self.initial} outside bounds {self.bounds}"
                     )
+        self._children: dict[Any, list["Param"]] = {}
+
+    def when(self, value: Any, *children: "Param") -> "Int":
+        """Declare children that are only active when this param equals ``value``.
+
+        Args:
+            value: The parent value that activates these children.
+            *children: One or more ``Param`` instances that are required
+                when this param's value equals ``value``.
+
+        Returns:
+            ``self``, for chaining.
+        """
+        self._children.setdefault(value, []).extend(children)
+        return self
 
     def validate(self, value: Any) -> int:
         if isinstance(value, bool):
@@ -121,6 +161,9 @@ class Int:
             desc += f" Range: [{self.bounds[0]}, {self.bounds[1]}]."
         if self.initial is not None:
             desc += f" Suggested starting point: {self.initial}."
+        for value, children in self._children.items():
+            names = ", ".join(c.name for c in children)
+            desc += f" When {value!r}: also include {names}."
         return {"type": "integer", "description": desc}
 
     def summary(self) -> str:
@@ -129,7 +172,14 @@ class Int:
             parts.append(f"bounds={self.bounds}")
         if self.initial is not None:
             parts.append(f"initial={self.initial}")
-        return ", ".join(parts)
+        base = ", ".join(parts)
+        if not self._children:
+            return base
+        lines = [base]
+        for value, children in self._children.items():
+            for child in children:
+                lines.append(f"  when {value!r}: {child.summary()}")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -146,6 +196,22 @@ class Choice:
             raise ValueError(
                 f"Choice '{self.name}': initial {self.initial!r} not in options {self.options}"
             )
+        self._children: dict[Any, list["Param"]] = {}
+
+    def when(self, value: Any, *children: "Param") -> "Choice":
+        """Declare children that are only active when this param equals ``value``.
+
+        Args:
+            value: The parent value that activates these children. Should
+                be one of ``self.options``.
+            *children: One or more ``Param`` instances that are required
+                when this param's value equals ``value``.
+
+        Returns:
+            ``self``, for chaining.
+        """
+        self._children.setdefault(value, []).extend(children)
+        return self
 
     def validate(self, value: Any) -> Any:
         if value not in self.options:
@@ -158,13 +224,23 @@ class Choice:
         desc = self.description + f" Options: {self.options}."
         if self.initial is not None:
             desc += f" Suggested starting point: {self.initial!r}."
+        for value, children in self._children.items():
+            names = ", ".join(c.name for c in children)
+            desc += f" When {value!r}: also include {names}."
         return {"enum": list(self.options), "description": desc}
 
     def summary(self) -> str:
         parts = [f"{self.name} (choice): {self.description}", f"options={self.options}"]
         if self.initial is not None:
             parts.append(f"initial={self.initial!r}")
-        return ", ".join(parts)
+        base = ", ".join(parts)
+        if not self._children:
+            return base
+        lines = [base]
+        for value, children in self._children.items():
+            for child in children:
+                lines.append(f"  when {value!r}: {child.summary()}")
+        return "\n".join(lines)
 
 
 Param = Float | Int | Choice
@@ -173,7 +249,7 @@ Param = Float | Int | Choice
 _PARAM_TYPES: dict[str, type] = {"Float": Float, "Int": Int, "Choice": Choice}
 
 
-def param_to_dict(p: Param) -> dict:
+def param_to_dict(p: "Param") -> dict:
     """Serialize a Param to a JSON-safe dict, preserving its concrete type.
 
     Args:
@@ -181,15 +257,21 @@ def param_to_dict(p: Param) -> dict:
 
     Returns:
         A dict containing all of ``p``'s dataclass fields plus a
-        ``"__type__"`` key holding the concrete class name. Suitable for
+        ``"__type__"`` key holding the concrete class name, and an optional
+        ``"_children"`` key for conditional children. Suitable for
         ``json.dumps``.
     """
     d = asdict(p)
     d["__type__"] = type(p).__name__
+    if p._children:
+        d["_children"] = [
+            [value, [param_to_dict(c) for c in children]]
+            for value, children in p._children.items()
+        ]
     return d
 
 
-def param_from_dict(d: dict) -> Param:
+def param_from_dict(d: dict) -> "Param":
     """Reconstruct a Param from ``param_to_dict()`` output.
 
     Args:
@@ -197,14 +279,19 @@ def param_from_dict(d: dict) -> Param:
             ``"__type__"`` key naming one of the known Param subclasses.
 
     Returns:
-        The reconstructed ``Float``, ``Int``, or ``Choice`` instance.
+        The reconstructed ``Float``, ``Int``, or ``Choice`` instance,
+        including any conditional children.
 
     Raises:
         KeyError: If ``"__type__"`` is missing or unknown.
     """
     d = dict(d)
     type_name = d.pop("__type__")
+    children_data = d.pop("_children", [])
     cls = _PARAM_TYPES[type_name]
     if "bounds" in d and d["bounds"] is not None:
         d["bounds"] = tuple(d["bounds"])
-    return cls(**d)
+    p = cls(**d)
+    for value, child_dicts in children_data:
+        p.when(value, *[param_from_dict(c) for c in child_dicts])
+    return p

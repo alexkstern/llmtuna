@@ -505,3 +505,126 @@ def test_custom_build_user_message_is_called():
     opt.suggest()
     assert len(calls) == 1
     assert p.calls[0]["user"] == "CUSTOM_USER_MESSAGE"
+
+
+# ============================================================
+# Conditional hyperparameters
+# ============================================================
+
+def _conditional_space():
+    """Space with a Choice parent and per-value children."""
+    optimizer = lt.Choice(
+        name="optimizer", description="Which optimizer", options=["adamw", "muon", "none"]
+    )
+    lr = lt.Float(name="lr", description="Learning rate", bounds=(1e-5, 1e-1))
+    beta1 = lt.Float(name="beta1", description="Beta1 for AdamW", bounds=(0.8, 0.99))
+    optimizer.when("adamw", lr, beta1)
+    optimizer.when("muon", lr)
+    return [optimizer]
+
+
+def test_tool_spec_includes_child_params_in_properties():
+    opt = lt.Tuner(provider=MockProvider(responses=[]), space=_conditional_space())
+    spec = opt._tool_spec()
+    props = set(spec["parameters"]["properties"].keys())
+    assert "optimizer" in props
+    assert "lr" in props
+    assert "beta1" in props
+
+
+def test_tool_spec_only_requires_top_level_params():
+    opt = lt.Tuner(provider=MockProvider(responses=[]), space=_conditional_space())
+    spec = opt._tool_spec()
+    assert spec["parameters"]["required"] == ["optimizer"]
+
+
+def test_suggest_validates_active_children():
+    """When optimizer=adamw, both lr and beta1 must be present and valid."""
+    p = MockProvider(responses=[{"optimizer": "adamw", "lr": 0.001, "beta1": 0.9}])
+    opt = lt.Tuner(provider=p, space=_conditional_space())
+    cfg = opt.suggest()
+    assert cfg["optimizer"] == "adamw"
+    assert cfg["lr"] == 0.001
+    assert cfg["beta1"] == 0.9
+
+
+def test_suggest_omits_inactive_children_from_cfg():
+    """When optimizer=none, lr and beta1 should not appear in cfg."""
+    p = MockProvider(responses=[{"optimizer": "none"}])
+    opt = lt.Tuner(provider=p, space=_conditional_space())
+    cfg = opt.suggest()
+    assert cfg == {"optimizer": "none"}
+    assert "lr" not in cfg
+    assert "beta1" not in cfg
+
+
+def test_suggest_ignores_inactive_child_if_llm_included_it():
+    """LLM included beta1 but optimizer=muon (beta1 not active) — still valid."""
+    p = MockProvider(responses=[{"optimizer": "muon", "lr": 0.01, "beta1": 0.95}])
+    opt = lt.Tuner(provider=p, space=_conditional_space())
+    cfg = opt.suggest()
+    assert cfg["optimizer"] == "muon"
+    assert cfg["lr"] == 0.01
+    assert "beta1" not in cfg
+
+
+def test_suggest_retries_when_active_child_missing():
+    """optimizer=adamw but beta1 missing — should retry."""
+    p = MockProvider(
+        responses=[
+            {"optimizer": "adamw", "lr": 0.001},           # beta1 missing
+            {"optimizer": "adamw", "lr": 0.001, "beta1": 0.9},  # valid
+        ]
+    )
+    opt = lt.Tuner(provider=p, space=_conditional_space(), max_retries=3)
+    cfg = opt.suggest()
+    assert cfg["beta1"] == 0.9
+    assert len(p.calls) == 2
+
+
+def test_suggest_retries_when_active_child_invalid():
+    """optimizer=adamw but beta1 out of bounds — should retry."""
+    p = MockProvider(
+        responses=[
+            {"optimizer": "adamw", "lr": 0.001, "beta1": 5.0},  # beta1 out of bounds
+            {"optimizer": "adamw", "lr": 0.001, "beta1": 0.9},  # valid
+        ]
+    )
+    opt = lt.Tuner(provider=p, space=_conditional_space(), max_retries=3)
+    cfg = opt.suggest()
+    assert cfg["beta1"] == 0.9
+    assert len(p.calls) == 2
+
+
+def test_suggest_still_rejects_truly_unknown_params():
+    """A param not in space and not a child should still trigger retry."""
+    p = MockProvider(
+        responses=[
+            {"optimizer": "adamw", "lr": 0.001, "beta1": 0.9, "phantom": 42},
+            {"optimizer": "adamw", "lr": 0.001, "beta1": 0.9},
+        ]
+    )
+    opt = lt.Tuner(provider=p, space=_conditional_space(), max_retries=3)
+    cfg = opt.suggest()
+    assert "phantom" not in cfg
+    assert len(p.calls) == 2
+
+
+def test_save_load_round_trip_with_conditional_children(tmp_path):
+    """Conditional children must survive a save/load cycle."""
+    opt = lt.Tuner(
+        provider=MockProvider(responses=[]),
+        space=_conditional_space(),
+    )
+    save_path = tmp_path / "state.json"
+    opt.save(path=save_path)
+
+    restored = lt.Tuner.load(path=save_path, provider=MockProvider(responses=[]))
+    assert len(restored.space) == 1
+    optimizer_param = restored.space[0]
+    assert isinstance(optimizer_param, lt.Choice)
+    assert "adamw" in optimizer_param._children
+    assert "muon" in optimizer_param._children
+    assert len(optimizer_param._children["adamw"]) == 2
+    assert optimizer_param._children["adamw"][0].name == "lr"
+    assert isinstance(optimizer_param._children["adamw"][0], lt.Float)

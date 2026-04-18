@@ -122,8 +122,27 @@ class Tuner:
         self.context = Context()
         self.history: list[Trial] = []
 
+    def _all_params(self) -> dict[str, Param]:
+        """Collect all params — top-level and conditional children — keyed by name."""
+        result: dict[str, Param] = {}
+
+        def collect(params: list[Param]) -> None:
+            for p in params:
+                result[p.name] = p
+                for children in p._children.values():
+                    collect(children)
+
+        collect(self.space)
+        return result
+
     def _tool_spec(self) -> dict:
-        """Build the tool definition the LLM is forced to call."""
+        """Build the tool definition the LLM is forced to call.
+
+        Top-level params are required. Conditional children appear in
+        ``properties`` but are omitted from ``required`` — their parent's
+        description explains when to include them.
+        """
+        all_params = self._all_params()
         return {
             "name": "propose_config",
             "description": (
@@ -132,31 +151,62 @@ class Tuner:
             ),
             "parameters": {
                 "type": "object",
-                "properties": {p.name: p.to_schema() for p in self.space},
+                "properties": {name: p.to_schema() for name, p in all_params.items()},
                 "required": [p.name for p in self.space],
             },
         }
 
+    def _validate_children(
+        self, params: list[Param], tool_args: dict, cfg: dict[str, Any]
+    ) -> None:
+        """Recursively validate active conditional children.
+
+        Args:
+            params: The params whose children to check (top-level or already
+                validated children).
+            tool_args: The raw tool_args dict from the LLM.
+            cfg: The cfg dict being built; parent values are already present.
+        """
+        for p in params:
+            if not p._children:
+                continue
+            parent_value = cfg[p.name]
+            active = p._children.get(parent_value, [])
+            for child in active:
+                if child.name not in tool_args:
+                    raise ValueError(
+                        f"Missing required parameter '{child.name}' "
+                        f"(required when {p.name}={parent_value!r})"
+                    )
+                cfg[child.name] = child.validate(tool_args[child.name])
+            self._validate_children(active, tool_args, cfg)
+
     def _validate_tool_args(self, tool_args: dict) -> dict:
         """Validate every space param against the LLM's tool_args.
+
+        Top-level params are always required. Conditional children are
+        required only when their parent matches the activating value.
+        Unknown params (not in the space, not a registered child) raise.
 
         Args:
             tool_args: The dict returned by the LLM's tool call.
 
         Returns:
-            A new dict mapping each param name to its validated/coerced value.
+            A new dict mapping each active param name to its validated value.
+            Inactive conditional children are absent from the result even if
+            the LLM included them.
 
         Raises:
             ValueError: On the first validation failure encountered. Caught
                 by ``suggest()``'s retry loop and fed back to the LLM as a
                 correction message.
         """
-        expected = {p.name for p in self.space}
-        extras = set(tool_args) - expected
+        all_valid = set(self._all_params())
+        extras = set(tool_args) - all_valid
         if extras:
             raise ValueError(
                 f"Unexpected parameters in tool_args: {sorted(extras)}. "
-                f"The search space defines only: {sorted(expected)}."
+                f"The search space defines only: {sorted(all_valid)}."
             )
         cfg: dict[str, Any] = {}
         for p in self.space:
@@ -165,6 +215,7 @@ class Tuner:
                     f"Missing required parameter '{p.name}' in tool_args"
                 )
             cfg[p.name] = p.validate(tool_args[p.name])
+        self._validate_children(self.space, tool_args, cfg)
         return cfg
 
     def suggest(self) -> dict:

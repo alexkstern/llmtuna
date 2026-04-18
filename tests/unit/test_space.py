@@ -245,3 +245,145 @@ def test_choice_to_schema_has_enum_no_type():
     schema = p.to_schema()
     assert schema["enum"] == ["relu", "gelu", "silu"]
     assert "type" not in schema
+
+
+# ============================================================
+# Conditional children — when()
+# ============================================================
+
+def test_when_returns_self_for_chaining():
+    opt = lt.Choice(name="optimizer", description="...", options=["adamw", "muon"])
+    lr = lt.Float(name="lr", description="lr", bounds=(1e-5, 1e-1))
+    assert opt.when("adamw", lr) is opt
+
+
+def test_when_accumulates_multiple_calls_same_value():
+    opt = lt.Choice(name="optimizer", description="...", options=["adamw", "muon"])
+    lr = lt.Float(name="lr", description="lr")
+    beta = lt.Float(name="beta", description="beta")
+    opt.when("adamw", lr)
+    opt.when("adamw", beta)
+    assert len(opt._children["adamw"]) == 2
+
+
+def test_when_accepts_multiple_children_at_once():
+    opt = lt.Choice(name="optimizer", description="...", options=["adamw", "muon"])
+    lr = lt.Float(name="lr", description="lr")
+    beta = lt.Float(name="beta", description="beta")
+    opt.when("adamw", lr, beta)
+    assert len(opt._children["adamw"]) == 2
+
+
+def test_when_different_values_have_separate_children():
+    opt = lt.Choice(name="optimizer", description="...", options=["adamw", "muon"])
+    lr_adamw = lt.Float(name="lr_adamw", description="...")
+    lr_muon = lt.Float(name="lr_muon", description="...")
+    opt.when("adamw", lr_adamw)
+    opt.when("muon", lr_muon)
+    assert "adamw" in opt._children
+    assert "muon" in opt._children
+    assert opt._children["adamw"][0].name == "lr_adamw"
+    assert opt._children["muon"][0].name == "lr_muon"
+
+
+def test_when_on_float_param():
+    dropout = lt.Float(name="dropout", description="...", bounds=(0.0, 1.0))
+    seed = lt.Int(name="dropout_seed", description="...")
+    dropout.when(0.5, seed)
+    assert 0.5 in dropout._children
+
+
+def test_when_on_int_param():
+    heads = lt.Int(name="heads", description="...", bounds=(1, 16))
+    head_dim = lt.Int(name="head_dim", description="...")
+    heads.when(8, head_dim)
+    assert 8 in heads._children
+
+
+def test_no_children_by_default():
+    p = lt.Float(name="lr", description="...")
+    assert p._children == {}
+
+
+# ============================================================
+# Conditional children — to_schema / summary
+# ============================================================
+
+def test_to_schema_includes_conditional_hint():
+    opt = lt.Choice(name="optimizer", description="Optimizer", options=["adamw", "muon"])
+    lr = lt.Float(name="lr", description="learning rate")
+    opt.when("adamw", lr)
+    desc = opt.to_schema()["description"]
+    assert "adamw" in desc
+    assert "lr" in desc
+
+
+def test_to_schema_without_children_unchanged():
+    p = lt.Choice(name="act", description="activation", options=["relu", "gelu"])
+    desc = p.to_schema()["description"]
+    assert "when" not in desc.lower()
+
+
+def test_summary_includes_indented_children():
+    opt = lt.Choice(name="optimizer", description="Optimizer", options=["adamw", "muon"])
+    lr = lt.Float(name="lr", description="learning rate", bounds=(1e-5, 1e-1))
+    opt.when("adamw", lr)
+    result = opt.summary()
+    assert "when 'adamw'" in result
+    assert "lr" in result
+
+
+def test_summary_without_children_is_single_line():
+    p = lt.Choice(name="act", description="activation", options=["relu"])
+    assert "\n" not in p.summary()
+
+
+# ============================================================
+# Conditional children — serialization round-trip
+# ============================================================
+
+def test_param_to_dict_includes_children():
+    from llmtuna.space import param_to_dict
+    opt = lt.Choice(name="optimizer", description="...", options=["adamw", "muon"])
+    lr = lt.Float(name="lr", description="lr", bounds=(1e-5, 1e-1))
+    opt.when("adamw", lr)
+    d = param_to_dict(opt)
+    assert "_children" in d
+    assert len(d["_children"]) == 1
+    value, child_dicts = d["_children"][0]
+    assert value == "adamw"
+    assert child_dicts[0]["name"] == "lr"
+
+
+def test_param_to_dict_no_children_key_when_empty():
+    from llmtuna.space import param_to_dict
+    p = lt.Float(name="lr", description="lr")
+    d = param_to_dict(p)
+    assert "_children" not in d
+
+
+def test_param_round_trip_with_children():
+    from llmtuna.space import param_to_dict, param_from_dict
+    opt = lt.Choice(name="optimizer", description="Optimizer", options=["adamw", "muon"])
+    lr = lt.Float(name="lr", description="lr", bounds=(1e-5, 1e-1))
+    beta = lt.Float(name="beta1", description="beta1", bounds=(0.8, 0.99))
+    opt.when("adamw", lr, beta)
+    opt.when("muon", lr)
+
+    restored = param_from_dict(param_to_dict(opt))
+    assert isinstance(restored, lt.Choice)
+    assert "adamw" in restored._children
+    assert "muon" in restored._children
+    assert len(restored._children["adamw"]) == 2
+    assert len(restored._children["muon"]) == 1
+    assert restored._children["adamw"][0].name == "lr"
+    assert isinstance(restored._children["adamw"][0], lt.Float)
+    assert restored._children["adamw"][0].bounds == (1e-5, 1e-1)
+
+
+def test_param_round_trip_no_children():
+    from llmtuna.space import param_to_dict, param_from_dict
+    p = lt.Float(name="lr", description="lr", bounds=(1e-5, 1.0))
+    restored = param_from_dict(param_to_dict(p))
+    assert restored._children == {}
+    assert restored.bounds == (1e-5, 1.0)
