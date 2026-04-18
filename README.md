@@ -1,6 +1,6 @@
 # llmtuna
 
-LLM-driven hyperparameter optimization with a torch-style ask/tell API.
+LLM-driven hyperparameter optimization.
 
 `llmtuna` is a general-purpose hyperparameter optimizer: you describe a
 search space, point it at any system you can run and measure, and a large
@@ -52,9 +52,6 @@ uv add --editable /path/to/llmtuna
 
 ## Quickstart
 
-`llmtuna` makes no assumptions about what's behind your `train_and_eval`
-call — anything returning a scalar metric works.
-
 ```python
 import llmtuna as lt
 
@@ -71,23 +68,31 @@ opt = lt.Tuner(
     objective="minimize",
 )
 
-# Optional: hand the LLM whatever context helps — code, notes, papers
-opt.context.add(text="brief description of your model and dataset")
-opt.context.add_file(path="train.py")
-opt.context.add_file(path="model.py")
-opt.context.add_file(path="dataloader.py")
-opt.context.add_file(path="docs/prior_results.md")
+# Tell the LLM what you are doing
+opt.context.add(
+    text="You are optimizing the hyperparameters for a small ML pipeline "
+         "that classifies sales records into 12 categories on ~50k rows of "
+         "tabular features. Lower validation loss is better."
+)
 
-# Optimization loop
+# Hand it the actual code, with short labels so it knows what each file is
+opt.context.add(text="This is the training script:")
+opt.context.add_file(path="train.py")
+opt.context.add(text="This is the data loader:")
+opt.context.add_file(path="dataloader.py")
+opt.context.add(text="This is the model definition:")
+opt.context.add_file(path="model.py")
+
 for _ in range(30):
-    cfg = opt.suggest()                  # LLM proposes a config
-    metric = train_and_eval(**cfg)       # your training / evaluation code
-    opt.observe(cfg=cfg, value=metric)   # report back
+    cfg = opt.suggest()
+    # e.g. cfg = {"learning_rate": 0.003, "n_layers": 8, "regularization": 0.01}
+    val_loss = train_and_eval(**cfg)
+    # e.g. val_loss = 0.482
+    opt.observe(cfg=cfg, value=val_loss)
 
 print(opt.best)         # {"cfg": {...}, "value": ...}
 print(opt.history)      # list of all Trials in chronological order
-
-opt.save(path="run.json")                # full transcript + state
+opt.save(path="run.json")
 ```
 
 ## Concepts
@@ -100,17 +105,18 @@ and a rolling `Context`. Exposes:
 
 - `suggest() -> dict` — ask the LLM for the next configuration. Validates
   the LLM's response against the search space and retries up to
-  `max_retries` times on validation failure, feeding the error back to
-  the LLM each retry.
+  `max_retries` times on validation failure (out-of-bounds, wrong type,
+  missing or extra params), feeding the error back to the LLM each retry.
 - `observe(cfg, value, note=None)` — record a trial result. Appends to
   `history` and to `context` so the LLM sees it on the next `suggest()`.
 - `best` — property returning `{"cfg": ..., "value": ...}` for the
   winning trial (sign-aware on `objective`), or `None` if no trials yet.
 - `history` — list of `Trial(cfg, value, note)` records.
 - `context` — the `Context` object (see below).
-- `save(path)` / `Tuner.load(path, provider=...)` — JSON serialization.
-  The provider is never serialized (no API keys on disk); the user
-  supplies a fresh provider on load.
+- `save(path)` / `Tuner.load(path, provider=..., system_prompt=..., format_*=...)` —
+  JSON serialization. The provider is never serialized (no API keys on
+  disk); the user supplies a fresh provider on load. Custom formatters
+  must be re-passed at load time or they revert to defaults.
 
 ### Hyperparameter types
 
@@ -128,16 +134,20 @@ retry.
 ### `Context`
 
 A first-class, ordered, append-only text log shown to the LLM on every
-`suggest()`. Add free-form text or snapshot files:
+`suggest()`. You add free-form text or snapshot files at any point —
+before the loop or in between trials:
 
 ```python
 opt.context.add(text="prior runs showed instability when learning_rate > 1e-2")
-opt.context.add_file(path="model.py")             # snapshot at call time
-opt.context.add_file(path="train.py")
-opt.context.add_file(path="dataloader.py")
-opt.context.refresh()                              # re-read all snapshotted files
-opt.context.refresh(path="model.py")               # or a specific one
+opt.context.add_file(path="model.py")     # reads the file NOW; stores its contents
 ```
+
+Files are snapshotted at the time of the call. If you've since edited a
+file on disk and want the LLM to see the new contents on the next
+`suggest()`, call `opt.context.refresh()` (re-reads all file-backed
+entries) or `opt.context.refresh(path="model.py")` (just one). It does
+**not** delete anything — entries are append-only; refresh updates the
+stored text in place.
 
 The Tuner also auto-appends the LLM's full response (reasoning + content
 + proposed config) on every `suggest()`, and the trial result on every
@@ -156,13 +166,15 @@ lt.OpenRouter(
     max_tokens=2000,
     max_retries=3,            # transient empty-response retries
     extra_body=None,          # passthrough for vendor-specific knobs
+    base_url=None,            # override to point at any OpenAI-compatible endpoint
 )
 ```
 
 OpenRouter speaks the OpenAI Chat Completions API, so most providers
-(Anthropic, OpenAI, Google, Mistral, vLLM endpoints, etc.) are reachable
-through it. Vendor SDK exceptions propagate unchanged — `llmtuna` does
-not heuristically reclassify them.
+(Anthropic, OpenAI, Google, Mistral, vLLM endpoints, local llama.cpp /
+Ollama, etc.) are reachable through it — pass a custom `base_url=` for
+a non-OpenRouter endpoint. Vendor SDK exceptions propagate unchanged;
+`llmtuna` does not heuristically reclassify them.
 
 To add a custom backend, subclass `Provider`:
 
@@ -191,37 +203,69 @@ opt = lt.Tuner(
 
 Defaults live in `llmtuna/defaults.py` — read them as the spec.
 
-## Testing
+## In-depth: human-in-the-loop steering
 
-The default `pytest` invocation runs ~150 mock-backed unit tests in
-under a second:
-
-```bash
-uv run pytest
-```
-
-Live-API integration tests live separately and require an OpenRouter
-key. They use Haiku-4.5 with reasoning disabled (~$0.001 per test):
-
-```bash
-export OPENROUTER_API_KEY=...
-uv run pytest tests/integration/
-```
-
-To write tests against your own code that uses `llmtuna`, the
-`MockProvider` is available for dependency injection (intentionally
-not exported at the top level since it is a test utility):
+You don't have to send every proposal to training. Inspect the LLM's
+suggestion, and if it's nonsense in your domain, push back with a note
+in the context and `continue` — the next `suggest()` will see your
+correction and propose again.
 
 ```python
-from llmtuna.providers.mock import MockProvider
+import llmtuna as lt
 
-provider = MockProvider(responses=[
-    {"learning_rate": 1e-3, "n_layers": 5, "regularization": 0.01},
-    {"learning_rate": 5e-4, "n_layers": 8, "regularization": 0.005},
-])
-opt = lt.Tuner(provider=provider, space=[...])
-cfg = opt.suggest()    # returns {"learning_rate": 1e-3, "n_layers": 5, ...}
+opt = lt.Tuner(
+    provider=lt.OpenRouter(model="anthropic/claude-sonnet-4-6"),
+    space=[
+        lt.Int(name="batch_size", description="per-step batch size",
+               bounds=(1, 4096), initial=64),
+        lt.Int(name="seq_len",    description="sequence length in tokens",
+               bounds=(64, 8192), initial=512),
+        lt.Float(name="learning_rate", description="lr",
+                 bounds=(1e-6, 1.0), initial=1e-3),
+    ],
+    objective="minimize",
+)
+
+opt.context.add(text="Training a small language model on an 80GB H100. "
+                     "Total tokens per batch must stay under 100,000 to fit memory.")
+opt.context.add_file(path="model.py")
+opt.context.add_file(path="train.py")
+
+MAX_TOKENS_PER_BATCH = 100_000
+
+for trial_idx in range(30):
+    cfg = opt.suggest()
+
+    # Domain check BEFORE burning a training run
+    tokens = cfg["batch_size"] * cfg["seq_len"]
+    if tokens > MAX_TOKENS_PER_BATCH:
+        opt.context.add(
+            text=f"REJECTED proposal #{trial_idx}: batch_size={cfg['batch_size']} "
+                 f"× seq_len={cfg['seq_len']} = {tokens} tokens, which exceeds "
+                 f"the {MAX_TOKENS_PER_BATCH} per-batch memory limit. "
+                 f"Re-propose with values that satisfy this constraint."
+        )
+        continue   # skip training; next suggest() will see the rejection note
+
+    val_loss = train_and_eval(**cfg)
+    opt.observe(cfg=cfg, value=val_loss)
+
+print(opt.best)
 ```
+
+Two things worth noting:
+1. **The constraint isn't part of the search space.** It's a runtime predicate
+   — too coupled (it ties two params together) for a per-param `bounds=`
+   to express. Adding it to context and rejecting in code is cleaner than
+   inventing structural support for joint constraints.
+2. **The LLM learns from rejections.** Past `REJECTED proposal: ...`
+   notes stay in the context, so the LLM sees its own past mistakes and
+   stops repeating them.
+
+The same pattern works for: enforcing hardware-specific constraints,
+catching configurations that diverged in training, injecting paper
+findings mid-run, or stopping the search early when you know what you
+want.
 
 ## Citation
 
