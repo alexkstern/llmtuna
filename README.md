@@ -240,20 +240,27 @@ opt.context.add_file(path="model.py")
 opt.context.add_file(path="train.py")
 
 MAX_TOKENS_PER_BATCH = 100_000
+MAX_REJECTIONS_PER_TRIAL = 5
 
-for trial_idx in range(30):
+for _ in range(30):
     cfg = opt.suggest()
 
-    # Domain check BEFORE burning a training run
-    tokens = cfg["batch_size"] * cfg["seq_len"]
-    if tokens > MAX_TOKENS_PER_BATCH:
+    # Pre-check the proposal. If bad, push back and ask again within the
+    # same trial slot — outer loop only counts trials we actually trained.
+    rejections = 0
+    while cfg["batch_size"] * cfg["seq_len"] > MAX_TOKENS_PER_BATCH:
         opt.context.add(
-            text=f"REJECTED proposal #{trial_idx}: batch_size={cfg['batch_size']} "
-                 f"× seq_len={cfg['seq_len']} = {tokens} tokens, which exceeds "
-                 f"the {MAX_TOKENS_PER_BATCH} per-batch memory limit. "
-                 f"Re-propose with values that satisfy this constraint."
+            text=f"REJECTED: batch_size={cfg['batch_size']} × "
+                 f"seq_len={cfg['seq_len']} = {cfg['batch_size'] * cfg['seq_len']} "
+                 f"tokens, which exceeds the {MAX_TOKENS_PER_BATCH} per-batch "
+                 f"memory limit. Re-propose with smaller values."
         )
-        continue   # skip training; next suggest() will see the rejection note
+        rejections += 1
+        if rejections > MAX_REJECTIONS_PER_TRIAL:
+            raise RuntimeError(
+                f"LLM kept proposing oversized batches after {MAX_REJECTIONS_PER_TRIAL} rejections"
+            )
+        cfg = opt.suggest()   # re-ask; the LLM sees the rejection note in context
 
     val_loss = train_and_eval(**cfg)
     opt.observe(cfg=cfg, value=val_loss)
