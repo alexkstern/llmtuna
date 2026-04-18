@@ -4,7 +4,9 @@ import json
 
 import pytest
 
+from llmtuna import defaults
 from llmtuna.context import Context
+from llmtuna.providers.mock import MockProvider
 
 
 @pytest.fixture
@@ -162,6 +164,107 @@ def test_refresh_raises_on_deleted_file(make_file):
     f.unlink()
     with pytest.raises(FileNotFoundError):
         ctx.refresh()
+
+
+# ============================================================
+# add_summary()
+# ============================================================
+
+def test_add_summary_appends_provider_completion(make_file):
+    f = make_file("model.py", "class Net: pass")
+    p = MockProvider(completion_responses=["a focused summary"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f])
+    assert len(ctx) == 1
+    assert ctx.entries[0].text == "a focused summary\n\n"
+
+
+def test_add_summary_uses_default_system_prompt(make_file):
+    f = make_file("model.py", "class Net: pass")
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f])
+    assert p.calls[0]["system"] == defaults.SUMMARIZE_SYSTEM
+
+
+def test_add_summary_user_message_includes_file_contents_and_name(make_file):
+    f = make_file("model.py", "FILE_BODY_MARKER")
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f])
+    user = p.calls[0]["user"]
+    assert "FILE_BODY_MARKER" in user
+    assert "--- model.py ---" in user
+
+
+def test_add_summary_concatenates_multiple_files_in_order(make_file):
+    f1 = make_file("a.py", "FIRST")
+    f2 = make_file("b.py", "SECOND")
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f1, f2])
+    user = p.calls[0]["user"]
+    assert user.index("FIRST") < user.index("SECOND")
+
+
+def test_add_summary_includes_hparam_names(make_file):
+    f = make_file("model.py", "x = 1")
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f], hparam_names=["lr", "depth"])
+    user = p.calls[0]["user"]
+    assert "lr" in user
+    assert "depth" in user
+
+
+def test_add_summary_omits_hparam_section_when_not_given(make_file):
+    f = make_file("model.py", "x = 1")
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f])
+    assert "Hyperparameters being tuned" not in p.calls[0]["user"]
+
+
+def test_add_summary_default_max_tokens_is_1000(make_file):
+    f = make_file("x.py", "x")
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f])
+    assert p.calls[0]["max_tokens"] == 1000
+
+
+def test_add_summary_max_tokens_override(make_file):
+    f = make_file("x.py", "x")
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f], max_tokens=200)
+    assert p.calls[0]["max_tokens"] == 200
+
+
+def test_add_summary_custom_system_prompt(make_file):
+    f = make_file("x.py", "x")
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    custom = "Summarize in haiku form."
+    ctx.add_summary(provider=p, paths=[f], system_prompt=custom)
+    assert p.calls[0]["system"] == custom
+
+
+def test_add_summary_entry_has_no_path_so_refresh_skips_it(make_file):
+    """Summary entries are not file-backed — refresh() must not touch them."""
+    f = make_file("x.py", "x")
+    p = MockProvider(completion_responses=["the summary"])
+    ctx = Context()
+    ctx.add_summary(provider=p, paths=[f])
+    assert ctx.entries[0].path is None
+    assert ctx.refresh() == 0
+
+
+def test_add_summary_raises_on_missing_file(tmp_path):
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    with pytest.raises(FileNotFoundError):
+        ctx.add_summary(provider=p, paths=[tmp_path / "missing.py"])
 
 
 # ============================================================

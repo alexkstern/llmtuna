@@ -42,26 +42,38 @@ class MockProvider(Provider):
     """Provider that returns queued responses and records every call.
 
     Attributes:
-        responses: Remaining queued responses (in the full ``Provider.propose``
-            shape after construction-time canonicalization). ``propose()``
-            pops from the front on each call.
-        calls: Cumulative log of every ``propose()`` call's arguments,
-            in order. Each entry is a dict with keys ``system``,
-            ``user``, ``tool_spec``.
+        responses: Remaining queued ``propose()`` responses (in the full
+            ``Provider.propose`` shape after construction-time
+            canonicalization). ``propose()`` pops from the front.
+        completion_responses: Remaining queued strings for ``complete()``.
+            ``complete()`` pops from the front.
+        calls: Cumulative log of every call's arguments, in order. Each
+            entry is a dict; ``propose()`` calls have keys ``system``,
+            ``user``, ``tool_spec``; ``complete()`` calls have keys
+            ``system``, ``user``, ``max_tokens``.
     """
 
-    def __init__(self, responses: list[dict]):
-        """Initialize the mock with a queue of canned responses.
+    def __init__(
+        self,
+        responses: list[dict] | None = None,
+        completion_responses: list[str] | None = None,
+    ):
+        """Initialize the mock with optional queues for both call types.
 
         Args:
             responses: Sequence of dicts to return from successive
-                ``propose()`` calls. Each may be either a bare ``tool_args``
-                dict (e.g. ``{"lr": 0.001}``) or the full response shape
-                (``{"reasoning": ..., "content": ..., "tool_args": ...}``).
-                Bare dicts are canonicalized at construction time. The list
-                is copied so external mutations do not affect the queue.
+                ``propose()`` calls. Each may be either a bare
+                ``tool_args`` dict (e.g. ``{"lr": 0.001}``) or the full
+                response shape. Bare dicts are canonicalized at
+                construction time.
+            completion_responses: Sequence of strings to return from
+                successive ``complete()`` calls. Both lists are copied so
+                external mutations do not affect the queues.
         """
-        self.responses: list[dict] = [_canonicalize(r) for r in responses]
+        self.responses: list[dict] = [
+            _canonicalize(r) for r in (responses or [])
+        ]
+        self.completion_responses: list[str] = list(completion_responses or [])
         self.calls: list[dict] = []
 
     def propose(self, system: str, user: str, tool_spec: dict) -> dict:
@@ -89,3 +101,25 @@ class MockProvider(Provider):
                 f"but only {len(self.calls) - 1} were queued)"
             )
         return self.responses.pop(0)
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Record the call and return the next queued completion string.
+
+        Raises:
+            IndexError: If the ``completion_responses`` queue is empty.
+        """
+        self.calls.append(
+            {"system": system, "user": user, "max_tokens": max_tokens}
+        )
+        if not self.completion_responses:
+            raise IndexError(
+                "MockProvider out of completion_responses — pass "
+                "completion_responses=[...] at construction"
+            )
+        return self.completion_responses.pop(0)

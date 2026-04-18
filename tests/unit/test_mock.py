@@ -145,3 +145,60 @@ def test_responses_list_is_copied_at_construction():
     assert p.propose(system="", user="", tool_spec={})["tool_args"] == {"x": 2}
     with pytest.raises(IndexError):
         p.propose(system="", user="", tool_spec={})
+
+
+# ============================================================
+# complete() — separate queue, separate call shape
+# ============================================================
+
+def test_complete_returns_queued_string():
+    p = MockProvider(completion_responses=["hello world"])
+    assert p.complete(system="sys", user="usr") == "hello world"
+
+
+def test_complete_pops_in_order():
+    p = MockProvider(completion_responses=["a", "b", "c"])
+    assert p.complete(system="", user="") == "a"
+    assert p.complete(system="", user="") == "b"
+    assert p.complete(system="", user="") == "c"
+
+
+def test_complete_records_call_with_max_tokens():
+    p = MockProvider(completion_responses=["ok"])
+    p.complete(system="sys", user="usr", max_tokens=512)
+    assert len(p.calls) == 1
+    assert p.calls[0] == {"system": "sys", "user": "usr", "max_tokens": 512}
+
+
+def test_complete_records_call_without_max_tokens():
+    p = MockProvider(completion_responses=["ok"])
+    p.complete(system="sys", user="usr")
+    assert p.calls[0]["max_tokens"] is None
+
+
+def test_complete_raises_when_queue_empty():
+    p = MockProvider(completion_responses=[])
+    with pytest.raises(IndexError, match="completion_responses"):
+        p.complete(system="", user="")
+
+
+def test_propose_and_complete_use_independent_queues():
+    """Mixing the two call types is fine — each pops from its own queue."""
+    p = MockProvider(
+        responses=[{"lr": 0.001}],
+        completion_responses=["a summary"],
+    )
+    assert p.complete(system="", user="") == "a summary"
+    assert p.propose(system="", user="", tool_spec={})["tool_args"] == {"lr": 0.001}
+    # Both queues now exhausted
+    with pytest.raises(IndexError):
+        p.complete(system="", user="")
+    with pytest.raises(IndexError):
+        p.propose(system="", user="", tool_spec={})
+
+
+def test_default_construction_with_no_args():
+    """Both queue args are optional (callers may only need one type)."""
+    p = MockProvider()
+    assert p.responses == []
+    assert p.completion_responses == []

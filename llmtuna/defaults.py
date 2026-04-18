@@ -13,6 +13,31 @@ prompt-optimization tools (DSPy, TextGrad, etc.) without touching the
 ``Tuner`` itself.
 """
 
+SUMMARIZE_SYSTEM = """\
+You are a senior ML engineer. You will be given source code files from a \
+training or experiment codebase, along with the names of the \
+hyperparameters that are being optimized over.
+
+Produce a CONCISE summary (target 300-500 words) covering ONLY what is \
+relevant to choosing good values for those hyperparameters:
+
+1. **What the code does**: model / system architecture, data, what is \
+   being trained or evaluated, and what metric is reported.
+2. **Training / evaluation setup**: optimizer, schedules, key \
+   computational details that affect hparam choice.
+3. **For each tuned hparam**: what it controls in this code, sensible \
+   ranges if obvious from the code, and any couplings with other \
+   tuned hparams.
+4. **Loss landscape intuition**: plausible interactions, log-scale vs \
+   linear sensitivity, common failure modes (divergence, overfit, OOM).
+
+Do NOT discuss hyperparameters that are not being tuned. Do NOT \
+exhaustively describe every line of code — stay focused on what an \
+optimizer agent needs to make good proposals. Output plain text suitable \
+for direct inclusion in a prompt.\
+"""
+
+
 SYSTEM_PROMPT = """\
 You are a hyperparameter optimizer. You observe experiment results and \
 propose configurations as instructed by the user's objective.

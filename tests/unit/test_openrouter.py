@@ -342,3 +342,52 @@ def test_parse_message_raises_on_invalid_json():
     p = _make_provider([])
     with pytest.raises(RuntimeError, match="not valid JSON"):
         p._parse_message(msg)
+
+
+# ============================================================
+# complete() — free-form text generation
+# ============================================================
+
+def _make_text_response(content: str):
+    """Build a SimpleNamespace mimicking a non-tool ChatCompletion response."""
+    msg = SimpleNamespace(content=content, tool_calls=None)
+    return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+
+def test_complete_returns_message_content():
+    p = _make_provider([_make_text_response("a brief summary")])
+    assert p.complete(system="sys", user="usr") == "a brief summary"
+
+
+def test_complete_passes_max_tokens_when_given():
+    p = _make_provider([_make_text_response("ok")])
+    p.complete(system="", user="", max_tokens=512)
+    assert p._client.calls[0]["max_tokens"] == 512
+
+
+def test_complete_falls_back_to_provider_max_tokens():
+    p = _make_provider([_make_text_response("ok")], max_tokens=4321)
+    p.complete(system="", user="")
+    assert p._client.calls[0]["max_tokens"] == 4321
+
+
+def test_complete_does_not_send_tool_or_extra_body():
+    """complete() is plain text generation — no tool spec, no reasoning."""
+    p = _make_provider([_make_text_response("ok")], thinking_budget=8000)
+    p.complete(system="", user="")
+    call = p._client.calls[0]
+    assert "tools" not in call
+    assert "tool_choice" not in call
+    assert "extra_body" not in call
+
+
+def test_complete_returns_empty_string_when_no_choices():
+    p = _make_provider([_make_empty_response()])
+    assert p.complete(system="", user="") == ""
+
+
+def test_complete_returns_empty_string_when_content_is_none():
+    msg = SimpleNamespace(content=None, tool_calls=None)
+    response = SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+    p = _make_provider([response])
+    assert p.complete(system="", user="") == ""

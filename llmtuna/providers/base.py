@@ -57,3 +57,28 @@ class Provider(ABC):
                 test misconfiguration). See each concrete provider's
                 docstring for specifics.
         """
+
+    @abstractmethod
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Run a single text-generation call (no tool, no structured output).
+
+        Used by helpers like ``llmtuna.summarize_files`` for free-form
+        text tasks — summarization, transcript narration, anything where
+        we want plain text rather than a forced tool call.
+
+        Args:
+            system: System prompt.
+            user: User message.
+            max_tokens: Optional cap on output tokens. When ``None``, the
+                provider's own default is used.
+
+        Returns:
+            The model's text content as a string. May be empty if the
+            model returned nothing.
+        """

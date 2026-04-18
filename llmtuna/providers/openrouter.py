@@ -147,6 +147,31 @@ class OpenRouter(Provider):
 
         return self._parse_message(response.choices[0].message)
 
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Free-form text generation (no tool call). See ``Provider.complete``.
+
+        Used for summarization and other one-shot text tasks. Reasoning
+        is intentionally disabled here — these calls are usually quick
+        digests where thinking overhead isn't worth the cost.
+        """
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
+        )
+        if not response.choices:
+            return ""
+        return response.choices[0].message.content or ""
+
     def _parse_message(self, msg) -> dict:
         """Parse an OpenAI-compatible message into the ``Provider.propose`` shape.
 

@@ -155,6 +155,24 @@ opt.context.pop(index=3)    # remove a specific one
 opt.context.clear()         # remove everything
 ```
 
+For long runs where dumping raw source files into context would blow
+up the window, use `add_summary()` instead — it makes one upfront LLM
+call (via `provider.complete()`) to digest the files into a focused
+summary:
+
+```python
+opt.context.add_summary(
+    provider=provider,
+    paths=["model.py", "train.py", "data.py"],
+    hparam_names=["learning_rate", "n_layers", "regularization"],
+    max_tokens=1000,        # cap the summary length
+)
+```
+
+The summary is a normal text entry (not file-backed), so `refresh()`
+ignores it. To re-summarize, `pop()` the old summary and call
+`add_summary()` again.
+
 The Tuner also auto-appends the LLM's full response (reasoning + content
 + proposed config) on every `suggest()`, and the trial result on every
 `observe()` — so the LLM sees its own past thinking and the empirical
@@ -182,15 +200,20 @@ Ollama, etc.) are reachable through it — pass a custom `base_url=` for
 a non-OpenRouter endpoint. Vendor SDK exceptions propagate unchanged;
 `llmtuna` does not heuristically reclassify them.
 
-To add a custom backend, subclass `Provider`:
+To add a custom backend, subclass `Provider` and implement two methods:
 
 ```python
 from llmtuna.providers.base import Provider
 
 class MyBackend(Provider):
     def propose(self, system: str, user: str, tool_spec: dict) -> dict:
-        # ...call your LLM, return:
+        # Forced tool call — used by Tuner.suggest() for hparam proposals.
         return {"reasoning": "...", "content": "...", "tool_args": {...}}
+
+    def complete(self, system: str, user: str, *, max_tokens=None) -> str:
+        # Plain text generation — used by Context.add_summary() and any
+        # other free-form text helper.
+        return "..."
 ```
 
 ### Customizing prompts and formatters

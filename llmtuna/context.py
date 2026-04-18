@@ -4,10 +4,17 @@ The Context is a first-class object in llmtuna: it accumulates every piece
 of text the LLM should see — scientist notes, file snapshots, prior trial
 results, raw LLM outputs — and is rendered into the user message on each
 Tuner.suggest() call. It survives save/load cycles via to_dict/from_dict.
+
+The ``add_summary`` method runs a one-shot LLM call that digests source
+files into a focused prompt — useful when raw file snapshots would blow
+up the context window on long runs.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
+
+from llmtuna import defaults
+from llmtuna.providers.base import Provider
 
 _ENTRY_SUFFIX = "\n\n"
 
@@ -61,6 +68,67 @@ class Context:
             text: Any string. Stored verbatim with a trailing separator.
         """
         self.entries.append(Entry(text=text + _ENTRY_SUFFIX))
+
+    def add_summary(
+        self,
+        provider: Provider,
+        paths: list[str | Path],
+        *,
+        hparam_names: list[str] | None = None,
+        max_tokens: int = 1000,
+        system_prompt: str | None = None,
+    ) -> None:
+        """Read source files, have the LLM summarize them, append the summary.
+
+        Use this instead of multiple ``add_file()`` calls when raw source
+        would blow up the context window on long runs. Costs one extra
+        LLM call upfront in exchange for much smaller per-trial context.
+
+        The resulting entry is a normal text entry — it has no ``path``
+        backing and is therefore NOT updated by ``refresh()``. To
+        re-summarize, ``pop()`` the old summary and call
+        ``add_summary()`` again.
+
+        Args:
+            provider: The ``Provider`` whose ``complete()`` method makes
+                the actual summarization call. Often the same provider
+                you give to the ``Tuner``.
+            paths: Source files to read and summarize. Snapshotted at
+                call time.
+            hparam_names: Optional list of hyperparameter names to focus
+                the summary on. Strongly recommended.
+            max_tokens: Cap on the LLM's summary output. Default 1000
+                tokens (~700 words) matches the prompt's 300-500 word
+                target with headroom.
+            system_prompt: Optional override for the default
+                ``SUMMARIZE_SYSTEM`` prompt.
+
+        Raises:
+            FileNotFoundError: If any of ``paths`` does not exist.
+        """
+        parts: list[str] = []
+        for p in paths:
+            path = Path(p)
+            parts.append(f"--- {path.name} ---\n{path.read_text()}")
+        source_text = "\n\n".join(parts)
+
+        hparam_info = ""
+        if hparam_names:
+            hparam_info = (
+                f"\n\nHyperparameters being tuned: {', '.join(hparam_names)}."
+            )
+
+        user_msg = (
+            "Summarize the following source files for the purpose of "
+            f"hyperparameter optimization.{hparam_info}\n\n{source_text}"
+        )
+
+        summary = provider.complete(
+            system=system_prompt or defaults.SUMMARIZE_SYSTEM,
+            user=user_msg,
+            max_tokens=max_tokens,
+        )
+        self.add(text=summary)
 
     def add_file(self, path: str | Path) -> None:
         """Read a file at this moment (snapshot) and append its contents.
