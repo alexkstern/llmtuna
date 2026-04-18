@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "llmtuna"
 version = "0.1.0"
-description = "LLM-driven hyperparameter optimization with a torch-style ask/tell API."
+description = "LLM-driven hyperparameter optimization for anything with knobs and a scalar metric."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}

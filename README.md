@@ -1,13 +1,11 @@
 # llmtuna
 
-LLM-driven hyperparameter optimization.
+LLM-driven hyperparameter optimization for anything with knobs and a
+scalar metric.
 
-`llmtuna` is a general-purpose hyperparameter optimizer: you describe a
-search space, point it at any system you can run and measure, and a large
-language model proposes configurations to try. It works for neural
-network training, classical ML (XGBoost, random forests, SVMs),
-reinforcement-learning agents, simulations, compiler/runtime flags —
-anything with knobs and a scalar metric.
+`llmtuna` is a general-purpose hyperparameter optimizer: you describe
+a search space, point it at any system you can run and measure, and a
+large language model proposes configurations to try.
 
 The LLM sees a rolling text context — whatever notes, code, papers, or
 prior trial results you choose to feed it — and reasons over them to
