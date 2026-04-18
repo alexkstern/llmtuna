@@ -104,8 +104,14 @@ class Context:
                 ``SUMMARIZE_SYSTEM`` prompt.
 
         Raises:
+            ValueError: If ``paths`` is empty (no point making an LLM
+                call to summarize nothing).
             FileNotFoundError: If any of ``paths`` does not exist.
         """
+        if not paths:
+            raise ValueError(
+                "Context.add_summary: paths must contain at least one file"
+            )
         parts: list[str] = []
         for p in paths:
             path = Path(p)

@@ -260,6 +260,15 @@ def test_add_summary_entry_has_no_path_so_refresh_skips_it(make_file):
     assert ctx.refresh() == 0
 
 
+def test_add_summary_raises_on_empty_paths():
+    """Don't waste an LLM call on zero files — raise loudly instead."""
+    p = MockProvider(completion_responses=["s"])
+    ctx = Context()
+    with pytest.raises(ValueError, match="at least one file"):
+        ctx.add_summary(provider=p, paths=[])
+    assert p.calls == []   # no LLM call happened
+
+
 def test_add_summary_raises_on_missing_file(tmp_path):
     p = MockProvider(completion_responses=["s"])
     ctx = Context()

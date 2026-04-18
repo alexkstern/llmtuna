@@ -68,9 +68,8 @@ class Provider(ABC):
     ) -> str:
         """Run a single text-generation call (no tool, no structured output).
 
-        Used by helpers like ``llmtuna.summarize_files`` for free-form
-        text tasks — summarization, transcript narration, anything where
-        we want plain text rather than a forced tool call.
+        Used by ``Context.add_summary`` and any other helper that wants
+        plain text from the LLM rather than a forced tool call.
 
         Args:
             system: System prompt.
