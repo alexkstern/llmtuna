@@ -29,25 +29,23 @@ abstraction, one `Tuner` class.
 
 ## Install
 
-Not on PyPI yet — install from a local clone using
+Clone the repo somewhere on your machine, then add it as a local
+editable dependency to your project with
 [uv](https://github.com/astral-sh/uv):
 
 ```bash
-git clone git@github.com:alexkstern/llmtuna.git
-cd llmtuna
-uv sync --extra dev
+git clone git@github.com:alexkstern/llmtuna.git ~/code/llmtuna
+
+# from inside your own project's directory:
+uv add --editable ~/code/llmtuna
 ```
 
-Run the test suite to confirm:
+Then in your code:
 
-```bash
-uv run pytest
-```
+```python
+import llmtuna as lt
 
-To use it from another project, point at the local checkout:
-
-```bash
-uv add --editable /path/to/llmtuna
+opt = lt.Tuner(...)
 ```
 
 ## Quickstart
