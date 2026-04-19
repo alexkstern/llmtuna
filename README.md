@@ -222,6 +222,7 @@ lt.OpenRouter(
     thinking_budget=10000,    # reasoning tokens; 0 disables
     max_tokens=2000,
     max_retries=3,            # transient empty-response retries
+    force_tool=False,         # see "tool forcing vs reasoning" below
     extra_body=None,          # passthrough for vendor-specific knobs
     base_url=None,            # override to point at any OpenAI-compatible endpoint
 )
@@ -232,6 +233,20 @@ OpenRouter speaks the OpenAI Chat Completions API, so most providers
 Ollama, etc.) are reachable through it — pass a custom `base_url=` for
 a non-OpenRouter endpoint. Vendor SDK exceptions propagate unchanged;
 `llmtuna` does not heuristically reclassify them.
+
+**Tool forcing vs. reasoning.** Sending OpenAI-style `tool_choice` to
+force the LLM to call `propose_config` suppresses reasoning tokens
+entirely on most providers (notably Anthropic). You can have one or
+the other, not both. Two valid configurations:
+
+| | `force_tool=False` (default) | `force_tool=True` |
+|---|---|---|
+| Tool call enforcement | system-prompt instruction ("You MUST call propose_config") | API-level `tool_choice` |
+| Reasoning captured? | ✅ yes (when `thinking_budget > 0`) | ❌ suppressed |
+| When to use | default; capable models honor the instruction reliably | weaker models that ignore "you MUST" prompts; requires `thinking_budget=0` |
+
+`OpenRouter(force_tool=True, thinking_budget>0)` is rejected at
+construction with a `ValueError` rather than silently wasting credits.
 
 To add a custom backend, subclass `Provider` and implement two methods:
 
