@@ -328,6 +328,153 @@ def test_best_returns_first_on_tie():
 
 
 # ============================================================
+# render_prompt() and save_prompt()
+# ============================================================
+
+def test_render_prompt_returns_three_keys():
+    p = MockProvider(responses=[])
+    opt = lt.Tuner(provider=p, space=_basic_space())
+    rp = opt.render_prompt()
+    assert set(rp.keys()) == {"system", "user", "tool_spec"}
+
+
+def test_render_prompt_makes_no_provider_calls():
+    """Crucial — preview must not cost API credits."""
+    p = MockProvider(responses=[])
+    opt = lt.Tuner(provider=p, space=_basic_space())
+    opt.render_prompt()
+    opt.render_prompt()
+    opt.render_prompt()
+    assert p.calls == []
+
+
+def test_render_prompt_matches_what_suggest_actually_sends():
+    """The load-bearing parity test. If render_prompt drifts from what
+    suggest sends, faithfulness is broken."""
+    p = MockProvider(responses=[{"lr": 0.001, "depth": 5}])
+    opt = lt.Tuner(
+        provider=p,
+        space=_basic_space(),
+        system_prompt="custom system prompt",
+    )
+    opt.context.add(text="prior note from the scientist")
+
+    expected = opt.render_prompt()
+    opt.suggest()
+    sent = p.calls[0]
+
+    assert sent["system"] == expected["system"]
+    assert sent["user"] == expected["user"]
+    assert sent["tool_spec"] == expected["tool_spec"]
+
+
+def test_render_prompt_output_is_json_serializable():
+    p = MockProvider(responses=[])
+    opt = lt.Tuner(provider=p, space=_basic_space())
+    json.dumps(opt.render_prompt())
+
+
+def test_save_prompt_writes_render_prompt_output(tmp_path):
+    p = MockProvider(responses=[])
+    opt = lt.Tuner(provider=p, space=_basic_space(), system_prompt="X")
+    save_path = tmp_path / "prompt.json"
+    opt.save_prompt(path=save_path)
+
+    written = json.loads(save_path.read_text())
+    assert written == opt.render_prompt()
+
+
+# ============================================================
+# system_prompt save / load round-trip
+# ============================================================
+
+def test_save_includes_system_prompt(tmp_path):
+    opt = lt.Tuner(
+        provider=MockProvider(responses=[]),
+        space=_basic_space(),
+        system_prompt="custom",
+    )
+    save_path = tmp_path / "state.json"
+    opt.save(path=save_path)
+    data = json.loads(save_path.read_text())
+    assert data["system_prompt"] == "custom"
+
+
+def test_load_restores_system_prompt_without_kwarg(tmp_path):
+    opt = lt.Tuner(
+        provider=MockProvider(responses=[]),
+        space=_basic_space(),
+        system_prompt="custom",
+    )
+    save_path = tmp_path / "state.json"
+    opt.save(path=save_path)
+
+    restored = lt.Tuner.load(path=save_path, provider=MockProvider(responses=[]))
+    assert restored.system_prompt == "custom"
+
+
+def test_load_kwarg_overrides_saved_system_prompt(tmp_path):
+    opt = lt.Tuner(
+        provider=MockProvider(responses=[]),
+        space=_basic_space(),
+        system_prompt="from-save",
+    )
+    save_path = tmp_path / "state.json"
+    opt.save(path=save_path)
+
+    restored = lt.Tuner.load(
+        path=save_path,
+        provider=MockProvider(responses=[]),
+        system_prompt="overridden-at-load",
+    )
+    assert restored.system_prompt == "overridden-at-load"
+
+
+def test_load_old_save_without_system_prompt_falls_back_to_default(tmp_path):
+    """Backward compat: pre-render_prompt save files lack system_prompt."""
+    from llmtuna import defaults as d
+
+    old_data = {
+        "version": 1,
+        "objective": "minimize",
+        "max_retries": 3,
+        "space": [
+            {"__type__": "Float", "name": "lr", "description": "lr",
+             "bounds": [0.0, 1.0], "initial": 0.001},
+            {"__type__": "Int", "name": "depth", "description": "depth",
+             "bounds": [1, 20], "initial": None},
+        ],
+        "context": {"entries": []},
+        "history": [],
+    }
+    save_path = tmp_path / "old.json"
+    save_path.write_text(json.dumps(old_data))
+
+    restored = lt.Tuner.load(path=save_path, provider=MockProvider(responses=[]))
+    assert restored.system_prompt == d.SYSTEM_PROMPT
+
+
+def test_render_prompt_after_save_load_is_identical(tmp_path):
+    """The audit guarantee: a saved run reloads to the same prompt."""
+    opt = lt.Tuner(
+        provider=MockProvider(responses=[]),
+        space=_basic_space(),
+        system_prompt="custom for audit",
+    )
+    opt.context.add(text="prior note")
+    opt.observe(cfg={"lr": 0.5, "depth": 5}, value=0.42)
+
+    pre = opt.render_prompt()
+    save_path = tmp_path / "state.json"
+    opt.save(path=save_path)
+
+    restored = lt.Tuner.load(path=save_path, provider=MockProvider(responses=[]))
+    post = restored.render_prompt()
+
+    assert pre == post
+
+
+# ============================================================
 # save / load round-trip
 # ============================================================
 
@@ -397,9 +544,10 @@ def test_load_round_trips_context(tmp_path):
     assert restored.context.render() == opt.context.render()
 
 
-def test_load_without_overrides_uses_defaults(tmp_path):
-    """Custom formatters from the original Tuner are NOT serialized.
-    Without re-passing them, load() falls back to defaults."""
+def test_load_without_overrides_restores_system_prompt_but_not_formatters(tmp_path):
+    """system_prompt IS serialized and restored automatically.
+    Custom formatters are NOT (functions can't round-trip through JSON);
+    they fall back to defaults unless re-passed at load time."""
     from llmtuna import defaults as d
 
     original = lt.Tuner(
@@ -412,8 +560,8 @@ def test_load_without_overrides_uses_defaults(tmp_path):
     original.save(path=save_path)
 
     restored = lt.Tuner.load(path=save_path, provider=MockProvider(responses=[]))
-    assert restored.system_prompt == d.SYSTEM_PROMPT
-    assert restored.format_proposal is d.format_proposal
+    assert restored.system_prompt == "custom prompt"   # restored from save file
+    assert restored.format_proposal is d.format_proposal   # not serializable; default
 
 
 def test_load_with_overrides_applies_them(tmp_path):

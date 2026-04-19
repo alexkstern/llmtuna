@@ -139,8 +139,15 @@ and a rolling `Context`. Exposes:
 - `context` — the `Context` object (see below).
 - `save(path)` / `Tuner.load(path, provider=..., system_prompt=..., format_*=...)` —
   JSON serialization. The provider is never serialized (no API keys on
-  disk); the user supplies a fresh provider on load. Custom formatters
-  must be re-passed at load time or they revert to defaults.
+  disk); the user supplies a fresh provider on load. `system_prompt`
+  IS serialized and restored automatically. Custom formatters must be
+  re-passed at load time or they revert to defaults.
+- `render_prompt() -> dict` — returns the exact `{"system", "user",
+  "tool_spec"}` that `suggest()` would send next, **without making an
+  API call**. Use it to preview / debug what the LLM is about to see.
+- `save_prompt(path)` — writes `render_prompt()`'s output to a JSON
+  file for human inspection. Frozen snapshot, NOT loadable — use
+  `save(path)` for state round-trip.
 
 ### Hyperparameter types
 

@@ -217,6 +217,49 @@ class Tuner:
             f"{self.max_retries + 1} attempts. Last error: {last_error}"
         )
 
+    def render_prompt(self) -> dict:
+        """Return the full prompt that ``suggest()`` would send, without sending it.
+
+        Builds the system prompt, user message, and tool spec exactly as
+        ``suggest()`` would assemble them at this moment, and returns
+        them as a JSON-safe dict. **No provider call is made** — useful
+        for previewing what the LLM is about to see, debugging, or
+        snapshotting for audit via ``save_prompt()``.
+
+        Returns:
+            A dict with three keys, all JSON-serializable:
+
+            - ``"system"`` (str): The system prompt.
+            - ``"user"`` (str): The fully assembled user message
+              (parameter bounds prelude + rendered context + closing
+              instruction).
+            - ``"tool_spec"`` (dict): The ``propose_config`` tool
+              definition (name, description, JSON-Schema parameters).
+        """
+        return {
+            "system": self.system_prompt,
+            "user": self.build_user_message(
+                context_text=self.context.render(),
+                space_summary=[p.summary() for p in self.space],
+                objective=self.objective,
+            ),
+            "tool_spec": self._tool_spec(),
+        }
+
+    def save_prompt(self, path: str | Path) -> None:
+        """Write the current ``render_prompt()`` output to a JSON file.
+
+        Sugar over ``json.dump(self.render_prompt(), open(path, "w"))``.
+        The resulting file is a frozen snapshot of what the LLM would
+        see on the next ``suggest()`` — for human inspection / audit.
+        It is **not** loadable; use ``save()`` / ``load()`` for state
+        round-trip.
+
+        Args:
+            path: Destination file path.
+        """
+        Path(path).write_text(json.dumps(self.render_prompt(), indent=2))
+
     def observe(
         self,
         cfg: dict,
@@ -269,6 +312,7 @@ class Tuner:
             "version": 1,
             "objective": self.objective,
             "max_retries": self.max_retries,
+            "system_prompt": self.system_prompt,
             "space": [param_to_dict(p) for p in self.space],
             "context": self.context.to_dict(),
             "history": [asdict(t) for t in self.history],
@@ -288,25 +332,29 @@ class Tuner:
     ) -> "Tuner":
         """Reconstruct a Tuner from a JSON file written by ``save()``.
 
-        Custom formatters and the system prompt are NOT serialized (functions
-        and arbitrary strings can't always round-trip through JSON cleanly).
-        If the original Tuner used custom overrides, **pass them again here**
-        — otherwise the defaults from ``llmtuna.defaults`` are used and you
-        will silently lose your customizations.
+        ``system_prompt`` IS serialized (since v0.0.2) and restored
+        automatically. Pass ``system_prompt=`` here only if you want to
+        OVERRIDE the saved value. Custom formatters are NOT serialized
+        (functions can't round-trip through JSON); if the original
+        Tuner used custom formatters, **pass them again here** —
+        otherwise the defaults from ``llmtuna.defaults`` are used and
+        you will silently lose your customizations.
 
         Args:
             path: Source file path.
             provider: A fresh ``Provider`` to attach. The provider is NOT
                 serialized in the save file (no API keys on disk).
-            system_prompt: Override for the default system prompt. Pass the
-                same string you used when constructing the original Tuner.
+            system_prompt: Override for the saved system prompt. If
+                ``None`` and the save file contains one, the saved
+                value is used. If ``None`` and the save file lacks
+                one (older saves), ``defaults.SYSTEM_PROMPT`` is used.
             format_proposal: Override for the default proposal formatter.
             format_result: Override for the default result formatter.
             build_user_message: Override for the default user-message builder.
 
         Returns:
-            A new ``Tuner`` with the saved space, objective, context, and
-            history, plus any formatter overrides you supplied.
+            A new ``Tuner`` with the saved space, objective, context,
+            history, and system prompt, plus any overrides you supplied.
         """
         data = json.loads(Path(path).read_text())
         space = [param_from_dict(d) for d in data["space"]]
@@ -315,7 +363,11 @@ class Tuner:
             space=space,
             objective=data["objective"],
             max_retries=data["max_retries"],
-            system_prompt=system_prompt,
+            system_prompt=(
+                system_prompt
+                if system_prompt is not None
+                else data.get("system_prompt")
+            ),
             format_proposal=format_proposal,
             format_result=format_result,
             build_user_message=build_user_message,
