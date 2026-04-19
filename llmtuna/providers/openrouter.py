@@ -77,12 +77,22 @@ class OpenRouter(Provider):
 
         Raises:
             ValueError: If no API key is found (neither ``api_key`` nor
-                ``OPENROUTER_API_KEY`` env var).
+                ``OPENROUTER_API_KEY`` env var); or if both
+                ``force_tool=True`` and ``thinking_budget > 0`` are set
+                — that combination silently wastes reasoning-token
+                budget because forced tool calls suppress reasoning on
+                most providers.
         """
         key = api_key or os.environ.get("OPENROUTER_API_KEY")
         if not key:
             raise ValueError(
                 "OpenRouter: no API key — pass api_key= or set OPENROUTER_API_KEY"
+            )
+        if force_tool and thinking_budget > 0:
+            raise ValueError(
+                "OpenRouter: force_tool=True suppresses reasoning tokens on "
+                "most providers. Set thinking_budget=0 if you want forced "
+                "tool calls, or force_tool=False (default) to keep reasoning."
             )
         self.model = model
         self.thinking_budget = thinking_budget

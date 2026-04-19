@@ -132,6 +132,29 @@ def test_construction_explicit_key_overrides_env(monkeypatch):
     assert p.model == "m"
 
 
+def test_construction_rejects_force_tool_with_thinking():
+    """force_tool=True suppresses reasoning — fail loud, don't waste credits."""
+    with pytest.raises(ValueError, match="force_tool=True suppresses reasoning"):
+        OpenRouter(
+            model="m",
+            api_key="test",
+            force_tool=True,
+            thinking_budget=1024,
+        )
+
+
+def test_construction_accepts_force_tool_with_thinking_disabled():
+    """The valid combo: forced tool calls AND no wasted reasoning budget."""
+    p = OpenRouter(
+        model="m",
+        api_key="test",
+        force_tool=True,
+        thinking_budget=0,
+    )
+    assert p.force_tool is True
+    assert p.thinking_budget == 0
+
+
 def test_construction_stores_all_knobs():
     p = OpenRouter(
         model="anthropic/claude-haiku-4-5",
@@ -189,10 +212,13 @@ def test_propose_does_not_send_tool_choice_by_default():
 
 
 def test_propose_sends_tool_choice_when_force_tool_true():
-    """Opt-in belt-and-suspenders mode for weaker models."""
+    """Opt-in belt-and-suspenders mode for weaker models. Must set
+    thinking_budget=0 — the reasoning vs. forcing trade-off is
+    enforced at construction (see test_construction_rejects_force_tool_with_thinking)."""
     p = _make_provider(
         [_make_response(_make_message(tool_args={"lr": 0.001}))],
         force_tool=True,
+        thinking_budget=0,
     )
     p.propose(system="", user="", tool_spec=_BASIC_TOOL_SPEC)
     assert p._client.calls[0]["tool_choice"] == {
