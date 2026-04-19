@@ -33,15 +33,20 @@ abstraction, one `Tuner` class.
 
 ## Install
 
-Clone the repo somewhere on your machine, then add it as a local
-editable dependency to your project with
-[uv](https://github.com/astral-sh/uv):
+Add `llmtuna` as a git dependency in your project's `pyproject.toml`:
+
+```toml
+[project]
+dependencies = ["llmtuna"]
+
+[tool.uv.sources]
+llmtuna = { git = "https://github.com/alexkstern/llmtuna.git", rev = "v0.0.1" }
+```
+
+Or with [uv](https://github.com/astral-sh/uv) directly:
 
 ```bash
-git clone git@github.com:alexkstern/llmtuna.git ~/code/llmtuna
-
-# from inside your own project's directory:
-uv add --editable ~/code/llmtuna
+uv add "llmtuna @ git+https://github.com/alexkstern/llmtuna.git@v0.0.1"
 ```
 
 Then in your code:
@@ -51,6 +56,23 @@ import llmtuna as lt
 
 opt = lt.Tuner(...)
 ```
+
+To update later, bump the `rev` (e.g. `v0.0.2`) and run `uv sync`. Use
+a commit hash in `rev` if you want even tighter pinning.
+
+### Editable local clone (for hacking on llmtuna itself)
+
+If you want to modify `llmtuna` while integrating it into your project:
+
+```bash
+git clone git@github.com:alexkstern/llmtuna.git ~/code/llmtuna
+
+# from inside your own project's directory:
+uv add --editable ~/code/llmtuna
+```
+
+This replaces the git-pinned source with a local editable install.
+Switch back by re-running the `uv add "llmtuna @ git+..."` command.
 
 ## Quickstart
 
