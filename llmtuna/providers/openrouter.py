@@ -46,6 +46,7 @@ class OpenRouter(Provider):
         thinking_budget: int = 10000,
         max_tokens: int = 2000,
         max_retries: int = 3,
+        force_tool: bool = False,
         extra_body: dict | None = None,
         base_url: str | None = None,
     ):
@@ -59,6 +60,14 @@ class OpenRouter(Provider):
             max_tokens: Max output tokens.
             max_retries: Number of times to retry on transient empty
                 responses (API returned no choices).
+            force_tool: If True, send OpenAI-style ``tool_choice`` to
+                force the LLM to call ``propose_config``. **Suppresses
+                reasoning tokens** on models that support reasoning
+                (notably Anthropic Claude). Default ``False`` — relies
+                on the system-prompt instruction to call the tool, which
+                strong models honor reliably and which preserves the
+                model's reasoning trace. **You can have forced tool
+                calls OR captured reasoning, not both.**
             extra_body: Dict forwarded as raw JSON in the request body
                 for vendor-specific knobs. The reasoning config is
                 injected automatically when ``thinking_budget > 0``;
@@ -79,6 +88,7 @@ class OpenRouter(Provider):
         self.thinking_budget = thinking_budget
         self.max_tokens = max_tokens
         self.max_retries = max_retries
+        self.force_tool = force_tool
         self.extra_body = extra_body or {}
         self.base_url = base_url or self.DEFAULT_BASE_URL
         self._client = OpenAI(base_url=self.base_url, api_key=key)
@@ -86,9 +96,14 @@ class OpenRouter(Provider):
     def propose(self, system: str, user: str, tool_spec: dict) -> dict:
         """Call the LLM and return the parsed proposal.
 
-        Forces the LLM to call ``tool_spec["name"]`` via ``tool_choice``,
-        retries up to ``max_retries`` times on empty responses, then
-        parses the message into the ``Provider.propose`` shape.
+        Sends the tool spec, optionally with ``tool_choice`` forcing
+        (controlled by ``force_tool``), retries up to ``max_retries``
+        times on empty responses, then parses the message into the
+        ``Provider.propose`` shape.
+
+        If the LLM did not call the tool, returns an empty ``tool_args``
+        dict — the Tuner's validation retry then re-prompts naturally
+        rather than crashing the loop.
 
         Args:
             system: System prompt.
@@ -99,11 +114,11 @@ class OpenRouter(Provider):
 
         Returns:
             ``{"reasoning": str, "content": str, "tool_args": dict}``.
+            ``tool_args`` is ``{}`` if the model produced no tool call.
 
         Raises:
-            RuntimeError: If the LLM did not call the forced tool, tool
-                arguments are not valid JSON, or the API returned no
-                choices after ``max_retries`` retries.
+            RuntimeError: If tool arguments are not valid JSON, or the
+                API returned no choices after ``max_retries`` retries.
             openai.OpenAIError: Vendor SDK exceptions (network errors,
                 bad-request, context overflow, etc.) propagate unchanged.
         """
@@ -124,11 +139,12 @@ class OpenRouter(Provider):
             "messages": messages,
             "max_tokens": self.max_tokens,
             "tools": [oai_tool],
-            "tool_choice": {
+        }
+        if self.force_tool:
+            kwargs["tool_choice"] = {
                 "type": "function",
                 "function": {"name": tool_spec["name"]},
-            },
-        }
+            }
         body = dict(self.extra_body)
         if self.thinking_budget > 0:
             body.setdefault("reasoning", {"max_tokens": self.thinking_budget})
@@ -175,14 +191,19 @@ class OpenRouter(Provider):
     def _parse_message(self, msg) -> dict:
         """Parse an OpenAI-compatible message into the ``Provider.propose`` shape.
 
+        Returns ``tool_args = {}`` when the LLM produced no tool call,
+        rather than raising — the Tuner's validation retry then
+        re-prompts naturally rather than crashing the loop.
+
         Args:
             msg: The ``message`` field from a chat completions response.
 
         Returns:
             ``{"reasoning": str, "content": str, "tool_args": dict}``.
+            ``tool_args`` is ``{}`` if no tool call was emitted.
 
         Raises:
-            RuntimeError: If no tool call is present, or if tool arguments
+            RuntimeError: If a tool call is present but its arguments
                 are not valid JSON.
         """
         reasoning = ""
@@ -193,16 +214,17 @@ class OpenRouter(Provider):
                 if hasattr(detail, "text"):
                     reasoning += detail.text or ""
                 elif isinstance(detail, dict):
-                    if detail.get("type") == "reasoning.text":
+                    kind = detail.get("type")
+                    if kind == "reasoning.text":
                         reasoning += detail.get("text", "")
+                    elif kind == "reasoning.encrypted":
+                        reasoning += "[reasoning encrypted by provider]"
 
         content = msg.content or ""
 
         if not getattr(msg, "tool_calls", None):
-            raise RuntimeError(
-                "OpenRouter: forced tool was not called. Model returned "
-                f"text content instead: {content[:200]!r}"
-            )
+            return {"reasoning": reasoning, "content": content, "tool_args": {}}
+
         tc = msg.tool_calls[0]
         try:
             tool_args = json.loads(tc.function.arguments)

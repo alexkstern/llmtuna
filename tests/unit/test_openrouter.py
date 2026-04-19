@@ -180,11 +180,22 @@ def test_propose_wraps_tool_spec_in_openai_function_format():
     ]
 
 
-def test_propose_forces_tool_choice():
+def test_propose_does_not_send_tool_choice_by_default():
+    """Default behavior: rely on system-prompt forcing, preserve reasoning.
+    Sending tool_choice would suppress reasoning tokens on Anthropic models."""
     p = _make_provider([_make_response(_make_message(tool_args={"lr": 0.001}))])
     p.propose(system="", user="", tool_spec=_BASIC_TOOL_SPEC)
-    call = p._client.calls[0]
-    assert call["tool_choice"] == {
+    assert "tool_choice" not in p._client.calls[0]
+
+
+def test_propose_sends_tool_choice_when_force_tool_true():
+    """Opt-in belt-and-suspenders mode for weaker models."""
+    p = _make_provider(
+        [_make_response(_make_message(tool_args={"lr": 0.001}))],
+        force_tool=True,
+    )
+    p.propose(system="", user="", tool_spec=_BASIC_TOOL_SPEC)
+    assert p._client.calls[0]["tool_choice"] == {
         "type": "function",
         "function": {"name": "propose_config"},
     }
@@ -328,12 +339,39 @@ def test_parse_message_tool_args_parsed():
     assert p._parse_message(msg)["tool_args"] == {"lr": 1e-3, "depth": 12}
 
 
-def test_parse_message_raises_when_no_tool_call():
-    """Forced tool was not called — model returned only text."""
-    msg = _make_message(content="I refuse to call the tool", tool_args=None)
+def test_parse_message_returns_empty_tool_args_when_no_tool_call():
+    """When the model returns only text (no tool call), we return empty
+    tool_args rather than raising — the Tuner's validation retry then
+    re-prompts naturally instead of crashing the loop."""
+    msg = _make_message(
+        content="I refuse to call the tool",
+        tool_args=None,
+        reasoning="Some reasoning here",
+    )
     p = _make_provider([])
-    with pytest.raises(RuntimeError, match="forced tool was not called"):
-        p._parse_message(msg)
+    result = p._parse_message(msg)
+    assert result["tool_args"] == {}
+    assert result["reasoning"] == "Some reasoning here"
+    assert result["content"] == "I refuse to call the tool"
+
+
+def test_parse_message_handles_reasoning_encrypted():
+    """Some OpenRouter routes return reasoning as encrypted blocks.
+    Surface as a placeholder rather than silently dropping."""
+    msg = _make_message(
+        tool_args={"lr": 0.001},
+        reasoning="",
+        reasoning_details=[
+            {"type": "reasoning.text", "text": "first part. "},
+            {"type": "reasoning.encrypted", "data": "opaque-blob"},
+            {"type": "reasoning.text", "text": " final part."},
+        ],
+    )
+    p = _make_provider([])
+    out = p._parse_message(msg)["reasoning"]
+    assert "first part." in out
+    assert "[reasoning encrypted by provider]" in out
+    assert "final part." in out
 
 
 def test_parse_message_raises_on_invalid_json():
